@@ -1,0 +1,22 @@
+version: "2"
+sql:
+  # CQRS write side: every statement mutates state.
+  - engine: "sqlite"
+    schema: "internal/infrastructure/sqlite/migrations"
+    queries: "internal/infrastructure/sqlite/sql/commands.sql"
+    gen:
+      go:
+        package: "command"
+        out: "internal/infrastructure/sqlite/gen/command"
+        emit_exact_table_names: false
+        emit_interface: true
+  # CQRS read side: every statement is a plain SELECT.
+  - engine: "sqlite"
+    schema: "internal/infrastructure/sqlite/migrations"
+    queries: "internal/infrastructure/sqlite/sql/queries.sql"
+    gen:
+      go:
+        package: "query"
+        out: "internal/infrastructure/sqlite/gen/query"
+        emit_exact_table_names: false
+        emit_interface: true
