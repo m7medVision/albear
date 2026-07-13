@@ -1,0 +1,9 @@
+{
+  "name": "dev.albear.native",
+  "description": "albear vault native messaging bridge (blind relay)",
+  "path": "/usr/local/bin/vault-native",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://iblbbooeonkneacnoakpkkpdpehdhdna/"
+  ]
+}
