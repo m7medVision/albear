@@ -1,0 +1,22 @@
+# Go build artifacts
+/vault
+/vaultd
+/vault-native
+*.test
+*.out
+coverage.*
+
+# Node
+node_modules/
+extension/dist/
+
+# Desktop (Electron)
+desktop/release/build/
+desktop/.erb/dll/
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
