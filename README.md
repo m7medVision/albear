@@ -1,4 +1,8 @@
-# albear — البير
+<p align="center">
+  <img src="assets/albear.png" width="160" alt="albear">
+</p>
+
+<h1 align="center">albear — البير</h1>
 
 Local-only encrypted secrets manager. No cloud, no telemetry, no network
 listeners — one Go daemon owns the vault; every client talks to it over a
