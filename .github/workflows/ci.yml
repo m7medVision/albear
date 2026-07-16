@@ -13,8 +13,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Runs on every event and decides which of the heavy jobs below are worth
+  # running, so a desktop-only change doesn't rebuild the extension, a Go dep
+  # bump doesn't build the desktop installer, etc. The filters must stay
+  # honest: any path that can affect a job's outcome must be listed here, or
+  # that job will skip and let a real failure slip through.
+  detect:
+    name: Detect changed components
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      extension: ${{ steps.filter.outputs.extension }}
+      desktop: ${{ steps.filter.outputs.desktop }}
+      generated: ${{ steps.filter.outputs.generated }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          # go covers the whole Go tree; generated is the narrow set that can
+          # make sqlc output or the Noise vectors drift (see its own job).
+          filters: |
+            go:
+              - 'cmd/**'
+              - 'internal/**'
+              - 'tools/noisevectors/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'sqlc.yaml'
+              - 'Makefile'
+              - '.golangci.yml'
+              - '.github/workflows/ci.yml'
+            extension:
+              - 'extension/**'
+              - '.github/workflows/ci.yml'
+            desktop:
+              - 'desktop/**'
+              - '.github/workflows/ci.yml'
+            generated:
+              - 'sqlc.yaml'
+              - 'internal/infrastructure/sqlite/sql/**'
+              - 'internal/infrastructure/sqlite/gen/**'
+              - 'internal/infrastructure/transport/noise/**'
+              - 'tools/noisevectors/**'
+              - 'extension/src/noise/testdata/vectors.json'
+              - 'desktop/src/main/testdata/vectors.json'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+
   go:
-    name: Go (fmt, vet, test)
+    name: Go (fmt, vet, lint, test)
+    needs: detect
+    if: needs.detect.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -35,11 +85,19 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: Go architecture lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
       - name: go test
         run: go test ./... -timeout 300s
 
   extension:
     name: Extension (build, test)
+    needs: detect
+    if: needs.detect.outputs.extension == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -68,6 +126,8 @@ jobs:
 
   desktop:
     name: Desktop (typecheck, build, test)
+    needs: detect
+    if: needs.detect.outputs.desktop == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -95,6 +155,8 @@ jobs:
 
   generated:
     name: Generated code is up to date
+    needs: detect
+    if: needs.detect.outputs.generated == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -142,3 +204,32 @@ jobs:
             echo "Example: feat(vaultd): add auto-lock timeout" >&2
             exit 1
           fi
+
+  # The ONLY status check to mark required in branch protection. It is green
+  # when every job above either passed or was intentionally skipped by the
+  # path filter — so a skipped job never blocks a merge, and a failed (or
+  # cancelled) job always does. Without this, requiring e.g. "desktop"
+  # directly would block merges on PRs where desktop was correctly skipped
+  # (a skipped job reports "skipped", not "success"). Failing closed on a
+  # detect failure too: if detection broke, nothing was really validated.
+  ci-ok:
+    name: CI (required)
+    needs: [detect, go, extension, desktop, generated, pr-title]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate results
+        run: |
+          echo "detect=${{needs.detect.result}} go=${{needs.go.result}} extension=${{needs.extension.result}} desktop=${{needs.desktop.result}} generated=${{needs.generated.result}} pr-title=${{needs.pr-title.result}}"
+          for r in \
+            "${{needs.detect.result}}" \
+            "${{needs.go.result}}" \
+            "${{needs.extension.result}}" \
+            "${{needs.desktop.result}}" \
+            "${{needs.generated.result}}" \
+            "${{needs.pr-title.result}}"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "CI gate failing on result: $r" >&2
+              exit 1
+            fi
+          done

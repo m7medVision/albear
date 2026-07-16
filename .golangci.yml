@@ -1,0 +1,90 @@
+# Architecture checks are deliberately explicit: a new dependency in a domain or
+# application package must be reviewed and added here as part of the design.
+version: "2"
+
+linters:
+  default: none
+  # depguard is the architecture linter. General Go correctness remains
+  # covered by the existing gofmt, go vet, and go test CI steps.
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        domain:
+          files:
+            - "internal/**/domain/**/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            # Domain packages may share domain primitives, but may not reach
+            # application, adapter, daemon, or infrastructure code.
+            - github.com/m7medVision/albear/internal/shared/domain
+            # URL canonicalisation is a domain rule, not an infrastructure concern.
+            - golang.org/x/net/idna
+            - golang.org/x/net/publicsuffix
+
+        access-application:
+          files:
+            - "internal/access/application/**/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/m7medVision/albear/internal/access/domain
+            - github.com/m7medVision/albear/internal/shared/domain
+            # Cross-context access is inverted through the vault KeySource.
+            - github.com/m7medVision/albear/internal/vault/application
+            - github.com/m7medVision/albear/internal/infrastructure/crypto
+            - github.com/m7medVision/albear/internal/infrastructure/sqlite
+            - github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command
+
+        backup-application:
+          files:
+            - "internal/backup/application/**/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/m7medVision/albear/internal/shared/domain
+            - github.com/m7medVision/albear/internal/vault/application
+            - github.com/m7medVision/albear/internal/infrastructure/sqlite
+
+        records-application:
+          files:
+            - "internal/records/application/**/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/m7medVision/albear/internal/records/domain
+            - github.com/m7medVision/albear/internal/shared/domain
+            - github.com/m7medVision/albear/internal/vault/application
+            - github.com/m7medVision/albear/internal/infrastructure/crypto
+            - github.com/m7medVision/albear/internal/infrastructure/sqlite
+            - github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command
+
+        security-application:
+          files:
+            - "internal/security/application/**/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/m7medVision/albear/internal/security/domain
+            - github.com/m7medVision/albear/internal/shared/domain
+            - github.com/m7medVision/albear/internal/vault/application
+            - github.com/m7medVision/albear/internal/infrastructure/crypto
+            - github.com/m7medVision/albear/internal/infrastructure/sqlite
+            - github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command
+
+        vault-application:
+          files:
+            - "internal/vault/application/**/*.go"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/m7medVision/albear/internal/vault/domain
+            - github.com/m7medVision/albear/internal/shared/domain
+            - github.com/m7medVision/albear/internal/infrastructure/crypto
+            - github.com/m7medVision/albear/internal/infrastructure/sqlite
+            - github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command
+
+  exclusions:
+    generated: lax
