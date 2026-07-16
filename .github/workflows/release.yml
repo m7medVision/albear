@@ -48,7 +48,7 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       release: ${{ steps.resolve.outputs.release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # svu reads the whole history
 
@@ -136,7 +136,7 @@ jobs:
       attestations: write
     steps:
       # Pin every job to the tagged commit: main may move while this runs.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.tag }}
           fetch-depth: 0 # goreleaser needs full history for the changelog
@@ -173,7 +173,7 @@ jobs:
     env:
       TAG: ${{ needs.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.tag }}
 
@@ -234,7 +234,7 @@ jobs:
     env:
       TAG: ${{ needs.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.tag }}
 
