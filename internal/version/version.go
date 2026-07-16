@@ -3,6 +3,8 @@
 package version
 
 import (
+	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 )
@@ -13,6 +15,49 @@ import (
 //
 // and stays "dev" for local builds.
 var Version = "dev"
+
+// pseudoVersionRE matches the pseudo-versions the go command synthesizes from
+// VCS state (e.g. v0.0.0-20260716185608-d9fd70567ba9). Mirrors
+// golang.org/x/mod/module.pseudoVersionRE; inlined to keep this package
+// stdlib-only.
+var pseudoVersionRE = regexp.MustCompile(`^v[0-9]+\.(0\.0-|[0-9]+\.[0-9]+-([^+]*\.)?0\.)[0-9]{14}-[A-Za-z0-9]+(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
+
+// go install cannot pass -ldflags, so binaries installed that way would report
+// "dev" forever — which also silences update checks, since update.Checker
+// treats "dev" as a build that must never phone home. Recover the version the
+// module system recorded for `go install <pkg>@v1.2.3` instead.
+//
+// Only an exact release tag counts. Since Go 1.24 a plain `go build` stamps a
+// VCS-derived pseudo-version rather than "(devel)", and a dirty tree adds
+// "+dirty"; treating either as a release would turn on update checks for local
+// development builds and compare a v0.0.0-<timestamp> pseudo-version against
+// every release, reporting an update forever.
+func init() {
+	if Version != "dev" {
+		return
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v, ok := releaseVersion(info.Main.Version); ok {
+			Version = v
+		}
+	}
+}
+
+// releaseVersion reports whether a runtime/debug main-module version came from
+// an exact release tag, and is therefore safe to report and to check updates
+// against.
+func releaseVersion(v string) (string, bool) {
+	if v == "" || v == "(devel)" || strings.Contains(v, "+dirty") {
+		return "", false
+	}
+	if pseudoVersionRE.MatchString(v) {
+		return "", false
+	}
+	if !IsValid(v) {
+		return "", false
+	}
+	return v, true
+}
 
 // Normalize trims whitespace and a single leading "v"/"V" so tags and bare
 // versions compare equal ("v1.2.3" == "1.2.3").
