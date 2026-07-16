@@ -6,10 +6,13 @@
 // audited @noble primitives. Interoperability with the Go daemon
 // (flynn/noise) is pinned by cross-language test vectors generated from Go.
 
-import { chacha20poly1305 } from '@noble/ciphers/chacha'
-import { x25519 } from '@noble/curves/ed25519'
-import { hmac } from '@noble/hashes/hmac'
-import { sha256 } from '@noble/hashes/sha256'
+// Subpath imports use explicit .js to stay compatible with both Noble v1
+// (legacy CJS + ESM exports) and Noble v2 (ESM-only, requires .js). The Vite
+// and jest configs both resolve them transparently.
+import { chacha20poly1305 } from '@noble/ciphers/chacha.js'
+import { x25519 } from '@noble/curves/ed25519.js'
+import { hmac } from '@noble/hashes/hmac.js'
+import { sha256 } from '@noble/hashes/sha2.js'
 
 export interface KeyPair {
   publicKey: Uint8Array
