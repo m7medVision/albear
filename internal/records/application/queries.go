@@ -3,9 +3,9 @@ package application
 import (
 	"context"
 
-	"albear/internal/infrastructure/crypto"
-	domain "albear/internal/records/domain"
-	shared "albear/internal/shared/domain"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	domain "github.com/m7medVision/albear/internal/records/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // LoadIndex reads every encrypted metadata blob, decrypts metadata only, and

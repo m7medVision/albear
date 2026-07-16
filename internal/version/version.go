@@ -9,7 +9,7 @@ import (
 
 // Version is stamped by release builds via
 //
-//	go build -ldflags "-X albear/internal/version.Version=v1.2.3"
+//	go build -ldflags "-X github.com/m7medVision/albear/internal/version.Version=v1.2.3"
 //
 // and stays "dev" for local builds.
 var Version = "dev"

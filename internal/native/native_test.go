@@ -11,11 +11,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"albear/internal/daemon"
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/ipc"
-	"albear/internal/infrastructure/sqlite"
-	transport "albear/internal/infrastructure/transport/noise"
+	"github.com/m7medVision/albear/internal/daemon"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/ipc"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	transport "github.com/m7medVision/albear/internal/infrastructure/transport/noise"
 )
 
 func TestNativeMessageRoundTrip(t *testing.T) {

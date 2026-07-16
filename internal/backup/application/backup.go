@@ -14,9 +14,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"albear/internal/infrastructure/sqlite"
-	shared "albear/internal/shared/domain"
-	vaultapp "albear/internal/vault/application"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultapp "github.com/m7medVision/albear/internal/vault/application"
 )
 
 var magic = []byte("ALBEARBK")

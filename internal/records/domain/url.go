@@ -7,7 +7,7 @@ import (
 	"golang.org/x/net/idna"
 	"golang.org/x/net/publicsuffix"
 
-	shared "albear/internal/shared/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // CanonicalOrigin is a parsed, normalized web origin: scheme, punycoded

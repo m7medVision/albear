@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	transport "albear/internal/infrastructure/transport/noise"
+	transport "github.com/m7medVision/albear/internal/infrastructure/transport/noise"
 )
 
 func TestIdentityRoundTrip(t *testing.T) {

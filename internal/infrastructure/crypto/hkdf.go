@@ -10,10 +10,10 @@ import (
 
 // Key-separation labels from the PRD key hierarchy (section 16.2).
 const (
-	LabelMetadata = "albear/v1/metadata"
-	LabelSecrets  = "albear/v1/secrets"
-	LabelAudit    = "albear/v1/audit"
-	LabelBackup   = "albear/v1/backup"
+	LabelMetadata = "github.com/m7medVision/albear/v1/metadata"
+	LabelSecrets  = "github.com/m7medVision/albear/v1/secrets"
+	LabelAudit    = "github.com/m7medVision/albear/v1/audit"
+	LabelBackup   = "github.com/m7medVision/albear/v1/backup"
 )
 
 // DeriveSubkey derives a purpose-bound 32-byte key from the root vault key.

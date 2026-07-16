@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/sqlite"
-	"albear/internal/infrastructure/sqlite/gen/command"
-	shared "albear/internal/shared/domain"
-	domain "albear/internal/vault/domain"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
+	domain "github.com/m7medVision/albear/internal/vault/domain"
 
 	"database/sql"
 )

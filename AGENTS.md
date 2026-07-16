@@ -200,7 +200,7 @@ cd desktop && npm run build && npx jest   # desktop has no make target either
 Release builds stamp the version — there is no Makefile variable for it:
 
 ```sh
-go build -ldflags "-X albear/internal/version.Version=v1.2.3" ./cmd/...
+go build -ldflags "-X github.com/m7medVision/albear/internal/version.Version=v1.2.3" ./cmd/...
 ```
 
 Fuzz targets (`go test -fuzz=<Name> -fuzztime=30s -run='^$' <pkg>`):

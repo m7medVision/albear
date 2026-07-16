@@ -8,10 +8,10 @@ import (
 	"os"
 	"strings"
 
-	"albear/internal/infrastructure/system"
-	"albear/internal/install"
-	"albear/internal/native"
-	"albear/internal/version"
+	"github.com/m7medVision/albear/internal/infrastructure/system"
+	"github.com/m7medVision/albear/internal/install"
+	"github.com/m7medVision/albear/internal/native"
+	"github.com/m7medVision/albear/internal/version"
 )
 
 // productionChromeIDs is the exact allowlist baked into release builds.

@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"sync"
 
-	"albear/internal/infrastructure/sqlite/gen/command"
-	"albear/internal/infrastructure/sqlite/gen/query"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/query"
 )
 
 // Store is the CQRS access point to the vault database. Reads go through

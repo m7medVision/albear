@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"math/big"
 
-	shared "albear/internal/shared/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // GenerateOptions controls password generation.

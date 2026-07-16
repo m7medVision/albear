@@ -7,7 +7,7 @@ import (
 	"io"
 	"net"
 
-	transport "albear/internal/infrastructure/transport/noise"
+	transport "github.com/m7medVision/albear/internal/infrastructure/transport/noise"
 )
 
 // wireMsg is the JSON shape exchanged with the extension over native

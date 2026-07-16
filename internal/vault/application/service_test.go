@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/sqlite"
-	shared "albear/internal/shared/domain"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // fastParams meets the schema hard minimums while staying quick in tests.

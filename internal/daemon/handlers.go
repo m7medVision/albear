@@ -5,13 +5,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	accessdomain "albear/internal/access/domain"
-	"albear/internal/adapters/protocol"
-	"albear/internal/infrastructure/crypto"
-	recordsapp "albear/internal/records/application"
-	recdomain "albear/internal/records/domain"
-	secdomain "albear/internal/security/domain"
-	shared "albear/internal/shared/domain"
+	accessdomain "github.com/m7medVision/albear/internal/access/domain"
+	"github.com/m7medVision/albear/internal/adapters/protocol"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	recordsapp "github.com/m7medVision/albear/internal/records/application"
+	recdomain "github.com/m7medVision/albear/internal/records/domain"
+	secdomain "github.com/m7medVision/albear/internal/security/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // connState is the per-connection authorization context.

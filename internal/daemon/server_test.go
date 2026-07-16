@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"albear/internal/adapters/protocol"
-	"albear/internal/client"
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/ipc"
-	"albear/internal/infrastructure/sqlite"
-	transport "albear/internal/infrastructure/transport/noise"
+	"github.com/m7medVision/albear/internal/adapters/protocol"
+	"github.com/m7medVision/albear/internal/client"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/ipc"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	transport "github.com/m7medVision/albear/internal/infrastructure/transport/noise"
 )
 
 var fastParams = crypto.KDFParams{MemoryKiB: crypto.MinMemoryKiB, Iterations: 3, Parallelism: 4}

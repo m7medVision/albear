@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	shared "albear/internal/shared/domain"
-	vaultapp "albear/internal/vault/application"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultapp "github.com/m7medVision/albear/internal/vault/application"
 )
 
 func TestMapErrorCodes(t *testing.T) {

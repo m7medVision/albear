@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
-	domain "albear/internal/records/domain"
-	shared "albear/internal/shared/domain"
+	domain "github.com/m7medVision/albear/internal/records/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // PayloadVersion tags the serialized payload layout inside each ciphertext.

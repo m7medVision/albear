@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/sqlite"
-	domain "albear/internal/security/domain"
-	vaultapp "albear/internal/vault/application"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	domain "github.com/m7medVision/albear/internal/security/domain"
+	vaultapp "github.com/m7medVision/albear/internal/vault/application"
 )
 
 var fastParams = crypto.KDFParams{MemoryKiB: crypto.MinMemoryKiB, Iterations: 3, Parallelism: 4}
