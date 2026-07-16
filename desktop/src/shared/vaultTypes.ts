@@ -21,8 +21,7 @@ export interface AlbearErrorInfo {
  * renderer gets clean, typed error codes rather than serialized exceptions.
  */
 export type AlbearResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; error: AlbearErrorInfo };
+  { ok: true; data: T } | { ok: false; error: AlbearErrorInfo };
 
 /** vault.status data, extended with local daemon reachability. */
 export interface DesktopStatus {
