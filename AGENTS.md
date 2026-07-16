@@ -197,11 +197,25 @@ lefthook install           # install the git hooks (no make target for this)
 cd desktop && npm run build && npx jest   # desktop has no make target either
 ```
 
-Release builds stamp the version — there is no Makefile variable for it:
+Releases are built by GoReleaser (`.goreleaser.yaml`), which owns the version
+stamp — there is no Makefile variable for it. To reproduce a release build
+locally without tagging or publishing anything:
+
+```sh
+goreleaser check                             # validate .goreleaser.yaml
+goreleaser release --snapshot --clean --skip=publish   # → dist/
+```
+
+A hand-rolled stamp, if you need one:
 
 ```sh
 go build -ldflags "-X github.com/m7medVision/albear/internal/version.Version=v1.2.3" ./cmd/...
 ```
+
+`go install` cannot pass ldflags, so `internal/version` also adopts an exact
+release tag from `runtime/debug` build info. Pseudo-versions and `+dirty` are
+rejected there on purpose: they mean a development build, which must keep
+reporting `dev` so `update.Checker` never phones home.
 
 Fuzz targets (`go test -fuzz=<Name> -fuzztime=30s -run='^$' <pkg>`):
 `FuzzParseOrigin`, `FuzzDecodeMetadata`, `FuzzDecodeSecret`,
@@ -218,21 +232,31 @@ Fuzz targets (`go test -fuzz=<Name> -fuzztime=30s -run='^$' <pkg>`):
 - Go: stdlib-first. Adding a module dependency needs a real reason.
 - Comments explain *why* a constraint exists, not what the line does.
 - Tests sit beside the code (`*_test.go`, `tests/` in the extension).
-- Releases are unified: one `vX.Y.Z` tag builds Go binaries, the extension
-  zip, and desktop installers into a single GitHub release.
+- Releases are unified: one `vX.Y.Z` tag builds Go binaries (plus deb/rpm and
+  checksums), the extension zip, and the Linux desktop installer into a single
+  GitHub release. GoReleaser creates it as a draft; the other jobs attach to
+  it; a final job un-drafts. Tag an `-rc` first to exercise the pipeline —
+  `prerelease: auto` keeps it out of `/releases/latest`, which drives the CLI
+  update notice.
 
 ## Gotchas
 
-- **`vaultd` is Linux-only.** `internal/infrastructure/ipc` is
+- **Albear ships Linux-only, and that is a product decision, not just a build
+  tag.** `internal/infrastructure/ipc` and `internal/daemon` are
   `//go:build linux` (peer-credential checks), so `GOOS=darwin|windows go
-  build ./cmd/vaultd` fails by design. `vault` and `vault-native` build on
-  all three. Don't "fix" a cross-platform daemon build without a real
-  peer-credential implementation for that OS.
+  build ./cmd/vaultd` fails by design. `vault` and `vault-native` still
+  *compile* on all three — but nothing they need exists there: `system.Paths`
+  is XDG-only, `system.CheckPrivate` assumes unix permission bits,
+  `install/chrome.go` refuses non-Linux outright, and there is no daemon to
+  dial. Releases therefore ship linux/amd64 and linux/arm64 only; shipping a
+  darwin/windows archive would mean shipping clients that cannot work. Don't
+  "fix" a cross-platform daemon build without a real peer-credential
+  implementation *and* per-OS paths for that OS.
 - **Two TypeScript Noise implementations exist** —
   `extension/src/noise/noise.ts` and `desktop/src/main/noise.ts` — and their
-  `testdata/vectors.json` are byte-identical copies. Change one, change both,
-  and regenerate vectors from Go with `make vectors`. Go is the source of
-  truth for the wire format.
+  `testdata/vectors.json` are byte-identical copies. Change one, change both.
+  `make vectors` regenerates from Go and copies to both; CI fails if either
+  checked-in copy drifts. Go is the source of truth for the wire format.
 - **`sqlite/gen/` is generated.** Edit `sql/*.sql`, then `make sqlc`.
 - **The extension uses pnpm; the desktop app uses npm.** Not interchangeable.
 - **Extension CSP forbids remote code.** No CDN, no eval, no remote fonts —
