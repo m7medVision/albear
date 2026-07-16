@@ -12,9 +12,9 @@ import (
 
 	flynnnoise "github.com/flynn/noise"
 
-	"albear/internal/adapters/protocol"
-	"albear/internal/infrastructure/crypto"
-	transport "albear/internal/infrastructure/transport/noise"
+	"github.com/m7medVision/albear/internal/adapters/protocol"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	transport "github.com/m7medVision/albear/internal/infrastructure/transport/noise"
 )
 
 // APIError is a structured daemon error.

@@ -1,0 +1,104 @@
+# Linux-only by design. vaultd cannot build elsewhere (internal/daemon and
+# internal/infrastructure/ipc are //go:build linux, for socket peer-credential
+# checks), and every other layer is Linux-shaped too: XDG-only paths, 0700
+# permission checks, a Unix socket, and `vault install` refusing non-Linux. A
+# darwin/windows archive would ship clients with no daemon to talk to.
+version: 2
+project_name: albear
+
+builds:
+  - id: vaultd
+    main: ./cmd/vaultd
+    binary: vaultd
+    # modernc.org/sqlite is pure Go, so cross-compiling needs no C toolchain.
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/m7medVision/albear/internal/version.Version={{ .Tag }}
+
+  - id: vault
+    main: ./cmd/vault
+    binary: vault
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/m7medVision/albear/internal/version.Version={{ .Tag }}
+
+  - id: vault-native
+    main: ./cmd/vault-native
+    binary: vault-native
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/m7medVision/albear/internal/version.Version={{ .Tag }}
+
+archives:
+  - id: default
+    ids: [vaultd, vault, vault-native]
+    # Matches the naming the hand-rolled workflow used, which install.sh parses.
+    name_template: "albear_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - deploy/albear-vaultd.service
+
+checksum:
+  name_template: checksums.txt
+
+nfpms:
+  - id: albear
+    package_name: albear
+    ids: [vaultd, vault, vault-native]
+    formats: [deb, rpm]
+    maintainer: Mohammed <1mohammed.bin.saif@gmail.com>
+    description: Local-only encrypted secrets manager.
+    license: MIT
+    homepage: https://github.com/m7medVision/albear
+    bindir: /usr/bin
+    contents:
+      # A user unit: enable per-user with `systemctl --user enable --now
+      # albear-vaultd`, never system-wide.
+      - src: deploy/albear-vaultd.service
+        dst: /usr/lib/systemd/user/albear-vaultd.service
+
+# AUR is written and validated but stays off: there is no AUR account yet, and
+# an enabled block without AUR_KEY fails the release. To turn on: create the
+# aur.archlinux.org/albear-bin.git repo, add the SSH key as the AUR_KEY repo
+# secret, and uncomment.
+#
+# aurs:
+#   - name: albear-bin
+#     ids: [default]
+#     homepage: https://github.com/m7medVision/albear
+#     description: Local-only encrypted secrets manager.
+#     maintainers: ['Mohammed <1mohammed.bin.saif@gmail.com>']
+#     license: MIT
+#     private_key: '{{ .Env.AUR_KEY }}'
+#     git_url: 'ssh://aur@aur.archlinux.org/albear-bin.git'
+#     package: |-
+#       install -Dm755 "./vault"        "${pkgdir}/usr/bin/vault"
+#       install -Dm755 "./vaultd"       "${pkgdir}/usr/bin/vaultd"
+#       install -Dm755 "./vault-native" "${pkgdir}/usr/bin/vault-native"
+#       install -Dm644 "./deploy/albear-vaultd.service" \
+#         "${pkgdir}/usr/lib/systemd/user/albear-vaultd.service"
+#       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/albear-bin/LICENSE"
+
+changelog:
+  use: github-native
+
+release:
+  github:
+    owner: m7medVision
+    name: albear
+  # The extension and desktop jobs attach to this draft; a final job un-drafts
+  # it. update.Checker reads /releases/latest, which GitHub excludes drafts and
+  # prereleases from — so a half-built or -rc release is never advertised.
+  draft: true
+  prerelease: auto

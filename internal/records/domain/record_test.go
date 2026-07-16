@@ -3,7 +3,7 @@ package domain
 import (
 	"testing"
 
-	shared "albear/internal/shared/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 func testID(t *testing.T) shared.ID {

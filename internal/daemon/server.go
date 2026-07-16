@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package daemon wires every bounded context into the vaultd process: socket
 // listener, Noise handshakes, session issuance, request routing, and the
 // restore/destroy lifecycle operations.
@@ -15,18 +17,18 @@ import (
 
 	flynnnoise "github.com/flynn/noise"
 
-	accessapp "albear/internal/access/application"
-	accessdomain "albear/internal/access/domain"
-	backupapp "albear/internal/backup/application"
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/ipc"
-	"albear/internal/infrastructure/sqlite"
-	transport "albear/internal/infrastructure/transport/noise"
-	recordsapp "albear/internal/records/application"
-	secapp "albear/internal/security/application"
-	secdomain "albear/internal/security/domain"
-	shared "albear/internal/shared/domain"
-	vaultapp "albear/internal/vault/application"
+	accessapp "github.com/m7medVision/albear/internal/access/application"
+	accessdomain "github.com/m7medVision/albear/internal/access/domain"
+	backupapp "github.com/m7medVision/albear/internal/backup/application"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/ipc"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	transport "github.com/m7medVision/albear/internal/infrastructure/transport/noise"
+	recordsapp "github.com/m7medVision/albear/internal/records/application"
+	secapp "github.com/m7medVision/albear/internal/security/application"
+	secdomain "github.com/m7medVision/albear/internal/security/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultapp "github.com/m7medVision/albear/internal/vault/application"
 )
 
 // ModeCLI (transport.ModeCLI) is honored only on peer-credential-verified

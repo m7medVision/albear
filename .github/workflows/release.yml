@@ -1,12 +1,18 @@
 # Unified release: pushing one tag vX.Y.Z produces ONE GitHub release that
-# carries the Go binaries, the extension zip, and the desktop installers
-# (plus electron-updater feed files). A draft release is created first so the
-# artifact jobs can attach to it in parallel; it is published (un-drafted)
-# only after every artifact job succeeds.
+# carries the Go binaries (plus deb/rpm and checksums), the extension zip, and
+# the Linux desktop installer.
 #
-# All gh CLI calls target the current repository ($GITHUB_REPOSITORY), so this
-# workflow needs no repo-slug edits. electron-builder's publish target
-# (owner/repo) lives in desktop/package.json under the "build.publish" key.
+# GoReleaser creates the release as a draft, so the extension and desktop jobs
+# can attach to it in parallel; it is published (un-drafted) only after every
+# artifact job succeeds. update.Checker reads /releases/latest, which GitHub
+# excludes drafts and prereleases from, so a half-built release is never
+# advertised to users.
+#
+# Linux-only by design — see the header of .goreleaser.yaml.
+#
+# All gh CLI calls target the current repository ($GITHUB_REPOSITORY).
+# electron-builder's publish target (owner/repo) lives in desktop/package.json
+# under the "build.publish" key and must match this repo.
 name: Release
 
 on:
@@ -17,77 +23,46 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Create draft release
+  goreleaser:
+    name: Go binaries, packages, draft release
     runs-on: ubuntu-latest
-    steps:
-      - name: Create draft release for tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $TAG already exists (workflow re-run); reusing it."
-          else
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
-              --draft --title "$TAG" --generate-notes
-          fi
-
-  go-binaries:
-    name: Go binaries (${{ matrix.goos }}/${{ matrix.goarch }})
-    needs: release
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        goos: [linux, darwin, windows]
-        goarch: [amd64, arm64]
-    env:
-      TAG: ${{ github.ref_name }}
-      ASSET: albear_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}
+    permissions:
+      contents: write
+      id-token: write      # provenance attestation
+      attestations: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # goreleaser needs full history for the changelog
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Build and package
+      # Creates the draft release and uploads tarballs, deb/rpm, checksums.
+      # Cross-compiles on this one runner: modernc.org/sqlite is pure Go, so
+      # CGO_ENABLED=0 needs no C toolchain and no per-arch runner.
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-        run: |
-          # vaultd depends on internal/infrastructure/ipc, which is
-          # //go:build linux — so vaultd is only shipped for linux today.
-          # Add it to the base list when it gains darwin/windows support.
-          cmds="vault vault-native"
-          if [ "$GOOS" = "linux" ]; then cmds="vault vaultd vault-native"; fi
-          ext=""
-          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          mkdir -p dist/pkg
-          for cmd in $cmds; do
-            go build -trimpath \
-              -ldflags "-s -w -X albear/internal/version.Version=${TAG}" \
-              -o "dist/pkg/${cmd}${ext}" "./cmd/${cmd}"
-          done
-          if [ "$GOOS" = "windows" ]; then
-            (cd dist/pkg && zip -q "../${ASSET}.zip" ./*)
-          else
-            # shellcheck disable=SC2086
-            tar -C dist/pkg -czf "dist/${ASSET}.tar.gz" $cmds
-          fi
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload to draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber \
-            dist/"$ASSET".*
+      # Signed, verifiable provenance for the artifacts users actually install.
+      # Worth more than the checksums file alone, which is served from the same
+      # origin as the binaries it describes.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
 
   extension:
     name: Extension zip
-    needs: release
+    needs: goreleaser
     runs-on: ubuntu-latest
     env:
       TAG: ${{ github.ref_name }}
@@ -138,13 +113,12 @@ jobs:
             "albear-extension-${TAG}.zip"
 
   desktop:
-    name: Desktop installers (${{ matrix.os }})
-    needs: release
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: Desktop installer (linux)
+    needs: goreleaser
+    # Linux only: the app dials a Unix socket under $XDG_RUNTIME_DIR served by
+    # vaultd, which has no macOS/Windows build. A .dmg or .exe would install an
+    # app that can never connect.
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -168,26 +142,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # electron-builder (--publish always + GH_TOKEN) uploads the installers
-      # and the electron-updater feed files (latest.yml / latest-mac.yml /
-      # latest-linux.yml) to the existing draft release for this tag (it
-      # matches the draft by tag, derived from the synced app version).
-      # Deliberately NOT `npm run package`: that script hardcodes
-      # `--publish never` and npm appends extra args to the wrong command in
-      # the chain. No code signing in CI: only GITHUB_TOKEN is available, so
-      # identity auto-discovery is disabled.
-      - name: Package and publish installers
+      # electron-builder (--publish always + GH_TOKEN) uploads the AppImage and
+      # the electron-updater feed file (latest-linux.yml) to the existing draft
+      # release for this tag (it matches the draft by tag, derived from the
+      # synced app version). Deliberately NOT `npm run package`: that script
+      # hardcodes `--publish never` and npm appends extra args to the wrong
+      # command in the chain.
+      - name: Package and publish installer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
           npm exec ts-node -- ./.erb/scripts/clean.js dist
           npm run build
-          npx electron-builder build --publish always
+          npx electron-builder build --linux --publish always
 
   publish:
     name: Publish release
-    needs: [go-binaries, extension, desktop]
+    needs: [extension, desktop]
     runs-on: ubuntu-latest
     steps:
       - name: Un-draft the release
@@ -195,4 +166,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false --latest
+          # --latest only for stable tags: a prerelease must never become the
+          # answer to /releases/latest, which drives the CLI update notice.
+          if [[ "$TAG" == *-* ]]; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false
+          else
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false --latest
+          fi

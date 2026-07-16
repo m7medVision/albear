@@ -3,7 +3,7 @@ package domain
 import (
 	"time"
 
-	shared "albear/internal/shared/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 type RecordType string

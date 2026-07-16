@@ -7,12 +7,12 @@ import (
 	"context"
 	"time"
 
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/sqlite"
-	"albear/internal/infrastructure/sqlite/gen/command"
-	domain "albear/internal/security/domain"
-	shared "albear/internal/shared/domain"
-	vaultapp "albear/internal/vault/application"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
+	domain "github.com/m7medVision/albear/internal/security/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultapp "github.com/m7medVision/albear/internal/vault/application"
 )
 
 type Recorder struct {

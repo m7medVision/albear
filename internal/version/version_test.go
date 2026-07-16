@@ -89,3 +89,28 @@ func TestIsNewer(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseVersion(t *testing.T) {
+	// Only an exact release tag may be adopted from build info: anything else
+	// would report a bogus version and switch update checks on for a build
+	// that must never phone home.
+	for in, want := range map[string]string{
+		"v1.2.3":     "v1.2.3",
+		"v0.1.0":     "v0.1.0",
+		"v1.2.3-rc1": "v1.2.3-rc1",
+
+		"":                                   "",
+		"(devel)":                            "",
+		"v1.2.3+dirty":                       "",
+		"v0.0.0-20260716185608-d9fd70567ba9": "",
+		"v0.0.0-20260716185608-d9fd70567ba9+dirty": "",
+		"v1.2.3-0.20260716185608-abcdefabcdef":     "",
+		"garbage":                                  "",
+	} {
+		got, ok := releaseVersion(in)
+		if got != want || ok != (want != "") {
+			t.Errorf("releaseVersion(%q) = (%q, %v), want (%q, %v)",
+				in, got, ok, want, want != "")
+		}
+	}
+}

@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	shared "albear/internal/shared/domain"
-	vaultapp "albear/internal/vault/application"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultapp "github.com/m7medVision/albear/internal/vault/application"
 )
 
 const Version = 1

@@ -3,10 +3,10 @@ package application
 import (
 	"context"
 
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/sqlite/gen/command"
-	domain "albear/internal/records/domain"
-	shared "albear/internal/shared/domain"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
+	domain "github.com/m7medVision/albear/internal/records/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // Create validates, encrypts, and persists a new record, then updates the

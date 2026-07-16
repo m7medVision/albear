@@ -67,7 +67,7 @@ jobs:
         run: pnpm test
 
   desktop:
-    name: Desktop (typecheck, build)
+    name: Desktop (typecheck, build, test)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -89,6 +89,41 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm test
+
+  generated:
+    name: Generated code is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Pinned: a different sqlc release regenerates different code, which
+      # would fail this check for reasons unrelated to the change under test.
+      - uses: sqlc-dev/setup-sqlc@v5
+        with:
+          sqlc-version: "1.31.1"
+
+      - name: sqlc output matches sql/
+        run: |
+          sqlc generate
+          git diff --exit-code -- internal/infrastructure/sqlite/gen
+
+      # Go owns the Noise wire format, and the extension and desktop TS
+      # implementations must test against byte-identical vectors. `make
+      # vectors` regenerates from Go and copies to both, so any diff here means
+      # a checked-in copy is stale or the two had drifted apart.
+      - name: Noise vectors match the Go implementation
+        run: |
+          make vectors
+          git diff --exit-code -- \
+            extension/src/noise/testdata/vectors.json \
+            desktop/src/main/testdata/vectors.json
 
   pr-title:
     name: PR title (conventional commits)

@@ -1,6 +1,6 @@
 GO_BIN := vaultd vault vault-native
 
-.PHONY: all build devd dev-ext dev-desktop extension test test-go test-ext fuzz vet sqlc vectors clean
+.PHONY: all build devd dev-ext dev-desktop extension test test-go test-ext cover fuzz vet sqlc vectors clean
 
 all: build extension
 
@@ -47,8 +47,13 @@ vet:
 sqlc:
 	sqlc generate
 
+# Go is the source of truth for the wire format. The extension and desktop each
+# carry their own TS Noise implementation and must test against byte-identical
+# vectors, so generate once and copy — regenerating per target would let the two
+# drift if the generator ever stopped being deterministic.
 vectors:
 	go run ./tools/noisevectors extension/src/noise/testdata/vectors.json
+	cp extension/src/noise/testdata/vectors.json desktop/src/main/testdata/vectors.json
 
 clean:
 	rm -f $(GO_BIN)

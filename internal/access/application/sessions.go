@@ -4,9 +4,9 @@ import (
 	"sync"
 	"time"
 
-	domain "albear/internal/access/domain"
-	"albear/internal/infrastructure/crypto"
-	shared "albear/internal/shared/domain"
+	domain "github.com/m7medVision/albear/internal/access/domain"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // DefaultSessionTTL bounds how long an idle session may act.

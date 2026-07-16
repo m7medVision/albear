@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"albear/internal/infrastructure/sqlite/gen/command"
-	"albear/internal/infrastructure/sqlite/gen/query"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/query"
 )
 
 func openTestDB(t *testing.T) (*sql.DB, string) {

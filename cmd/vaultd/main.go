@@ -12,12 +12,12 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"albear/internal/daemon"
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/ipc"
-	"albear/internal/infrastructure/sqlite"
-	"albear/internal/infrastructure/system"
-	"albear/internal/version"
+	"github.com/m7medVision/albear/internal/daemon"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/ipc"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	"github.com/m7medVision/albear/internal/infrastructure/system"
+	"github.com/m7medVision/albear/internal/version"
 )
 
 func main() {

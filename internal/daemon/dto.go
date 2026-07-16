@@ -1,9 +1,11 @@
+//go:build linux
+
 package daemon
 
 import (
-	recordsapp "albear/internal/records/application"
-	domain "albear/internal/records/domain"
-	shared "albear/internal/shared/domain"
+	recordsapp "github.com/m7medVision/albear/internal/records/application"
+	domain "github.com/m7medVision/albear/internal/records/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // Wire DTOs. Secrets travel as plain strings ONLY inside Noise-encrypted

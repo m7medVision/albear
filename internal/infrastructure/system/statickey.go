@@ -7,7 +7,7 @@ import (
 
 	flynnnoise "github.com/flynn/noise"
 
-	transport "albear/internal/infrastructure/transport/noise"
+	transport "github.com/m7medVision/albear/internal/infrastructure/transport/noise"
 )
 
 type staticKeyFile struct {

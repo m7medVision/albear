@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	domain "albear/internal/records/domain"
-	shared "albear/internal/shared/domain"
+	domain "github.com/m7medVision/albear/internal/records/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // IndexEntry is one record's decrypted, searchable metadata.

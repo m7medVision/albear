@@ -5,10 +5,10 @@
 package application
 
 import (
-	shared "albear/internal/shared/domain"
-	vaultapp "albear/internal/vault/application"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultapp "github.com/m7medVision/albear/internal/vault/application"
 
-	"albear/internal/infrastructure/sqlite"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
 )
 
 // KeySource is the temporary cryptographic capability granted by the Vault

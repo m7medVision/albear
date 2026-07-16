@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	domain "albear/internal/access/domain"
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/sqlite"
-	shared "albear/internal/shared/domain"
-	vaultapp "albear/internal/vault/application"
+	domain "github.com/m7medVision/albear/internal/access/domain"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultapp "github.com/m7medVision/albear/internal/vault/application"
 )
 
 var fastParams = crypto.KDFParams{MemoryKiB: crypto.MinMemoryKiB, Iterations: 3, Parallelism: 4}

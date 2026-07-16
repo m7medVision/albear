@@ -14,12 +14,12 @@ import (
 
 	"golang.org/x/term"
 
-	"albear/internal/adapters/protocol"
-	"albear/internal/client"
-	"albear/internal/infrastructure/system"
-	"albear/internal/install"
-	"albear/internal/update"
-	"albear/internal/version"
+	"github.com/m7medVision/albear/internal/adapters/protocol"
+	"github.com/m7medVision/albear/internal/client"
+	"github.com/m7medVision/albear/internal/infrastructure/system"
+	"github.com/m7medVision/albear/internal/install"
+	"github.com/m7medVision/albear/internal/update"
+	"github.com/m7medVision/albear/internal/version"
 )
 
 // Exit codes (PRD 14.4).

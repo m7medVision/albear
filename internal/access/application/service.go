@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	domain "albear/internal/access/domain"
-	"albear/internal/infrastructure/crypto"
-	"albear/internal/infrastructure/sqlite"
-	"albear/internal/infrastructure/sqlite/gen/command"
-	shared "albear/internal/shared/domain"
-	vaultapp "albear/internal/vault/application"
+	domain "github.com/m7medVision/albear/internal/access/domain"
+	"github.com/m7medVision/albear/internal/infrastructure/crypto"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
+	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultapp "github.com/m7medVision/albear/internal/vault/application"
 )
 
 // PendingPairing is an in-memory pairing request from an unpaired channel.

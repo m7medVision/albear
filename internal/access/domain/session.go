@@ -3,7 +3,7 @@ package domain
 import (
 	"time"
 
-	shared "albear/internal/shared/domain"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 // Session is an in-memory authorization for one connected client. Sessions
