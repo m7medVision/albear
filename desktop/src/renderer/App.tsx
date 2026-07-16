@@ -35,11 +35,7 @@ import appIcon from '../../assets/icons/128x128.png';
 import '@/styles/globals.css';
 
 type Phase =
-  | 'connecting'
-  | 'unavailable'
-  | 'uninitialized'
-  | 'locked'
-  | 'unlocked';
+  'connecting' | 'unavailable' | 'uninitialized' | 'locked' | 'unlocked';
 
 class ApiError extends Error {
   constructor(
