@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package daemon wires every bounded context into the vaultd process: socket
 // listener, Noise handshakes, session issuance, request routing, and the
 // restore/destroy lifecycle operations.
