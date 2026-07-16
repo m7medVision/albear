@@ -103,8 +103,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Pinned: a different sqlc release regenerates different code, which
-      # would fail this check for reasons unrelated to the change under test.
+      # Pinned: another sqlc release regenerates different code and fails this
+      # check for reasons unrelated to the change under test.
       - uses: sqlc-dev/setup-sqlc@v5
         with:
           sqlc-version: "1.31.1"
@@ -114,10 +114,8 @@ jobs:
           sqlc generate
           git diff --exit-code -- internal/infrastructure/sqlite/gen
 
-      # Go owns the Noise wire format, and the extension and desktop TS
-      # implementations must test against byte-identical vectors. `make
-      # vectors` regenerates from Go and copies to both, so any diff here means
-      # a checked-in copy is stale or the two had drifted apart.
+      # Go owns the Noise wire format; both TS copies must be byte-identical.
+      # A diff here means a checked-in copy is stale or the two have drifted.
       - name: Noise vectors match the Go implementation
         run: |
           make vectors
