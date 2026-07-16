@@ -1,7 +1,7 @@
 // Popup UI: connection/lock state, matching records for the current tab,
 // explicit fill, pairing workflow (PRD 13.2).
 import * as React from 'react'
-import { KeyRound, Search, ShieldOff, Eye, Loader2, Plus } from 'lucide-react'
+import { Search, ShieldOff, Eye, Loader2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardAction } from '@/components/ui/card'
@@ -224,9 +224,15 @@ export function App(): React.ReactElement {
   return (
     <div className="w-[340px] min-h-[200px] flex flex-col">
       <header className="flex items-center gap-2 px-3 py-2.5 border-b border-border">
-        <KeyRound className="size-4 text-muted-foreground" />
-        <h1 className="text-sm font-semibold flex-1">
-          albear <span className="text-muted-foreground font-normal">البير</span>
+        {/* Same mark and wordmark as the desktop app. The icon is drawn for a
+            light field, so the white tile is fixed in both themes. */}
+        <img
+          src="/icons/32.png"
+          alt=""
+          className="size-6 rounded-md shrink-0 bg-white p-0.5 ring-1 ring-border"
+        />
+        <h1 className="flex-1 font-arabic text-lg font-bold leading-none" lang="ar">
+          البير
         </h1>
         <Badge variant={sb.variant}>{sb.text}</Badge>
       </header>

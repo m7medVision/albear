@@ -7,7 +7,6 @@ import {
   Copy,
   Eye,
   EyeOff,
-  KeyRound,
   Loader2,
   Lock,
   RefreshCw,
@@ -30,6 +29,9 @@ import type {
   RecordView,
   SecretView,
 } from '../shared/vaultTypes';
+// The app mark itself, rather than a stand-in glyph. The 128px source keeps it
+// crisp on HiDPI at its 28px display size.
+import appIcon from '../../assets/icons/128x128.png';
 import '@/styles/globals.css';
 
 type Phase =
@@ -56,7 +58,7 @@ function unwrap<T>(result: AlbearResult<T>): T {
 
 function badgeFor(phase: Phase): {
   text: string;
-  variant: 'default' | 'secondary' | 'destructive' | 'outline';
+  variant: 'default' | 'secondary' | 'destructive' | 'success' | 'outline';
 } {
   switch (phase) {
     case 'connecting':
@@ -67,8 +69,10 @@ function badgeFor(phase: Phase): {
       return { text: 'no vault', variant: 'outline' };
     case 'locked':
       return { text: 'locked', variant: 'secondary' };
+    // Lock state is the one thing worth spotting without reading: green
+    // unlocked, grey locked, red unreachable.
     default:
-      return { text: 'unlocked', variant: 'default' };
+      return { text: 'unlocked', variant: 'success' };
   }
 }
 
@@ -248,26 +252,41 @@ export default function App(): React.ReactElement {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="flex items-center gap-2 px-4 py-3 border-b border-border">
-        <KeyRound className="size-4 text-muted-foreground" />
-        <h1 className="text-sm font-semibold flex-1">
-          Albear{' '}
-          <span className="text-muted-foreground font-normal">البير</span>
-        </h1>
-        {phase === 'unlocked' && (
-          <Button variant="secondary" size="sm" onClick={() => void lock()}>
-            <Lock />
-            Lock
-          </Button>
-        )}
-        <Badge variant={badge.variant}>{badge.text}</Badge>
+      {/* Full-bleed rule, but the controls line up with the content column
+          below rather than drifting out to the window edges. */}
+      <header className="px-6 py-4 border-b border-border">
+        <div className="w-full max-w-3xl mx-auto flex items-center gap-3">
+          {/* The mark is drawn for a light field — its own background is
+              transparent, so it muddies against a dark header. The white tile
+              is fixed in both themes to keep the shield legible. */}
+          <img
+            src={appIcon}
+            alt=""
+            className="size-7 rounded-md shrink-0 bg-white p-0.5 ring-1 ring-border"
+          />
+          {/* No dir="rtl": the flex-1 heading would right-align the wordmark
+              away from the logo. Bidi already shapes the word itself. */}
+          <h1
+            className="flex-1 font-arabic text-2xl font-bold leading-none"
+            lang="ar"
+          >
+            البير
+          </h1>
+          {phase === 'unlocked' && (
+            <Button variant="secondary" size="sm" onClick={() => void lock()}>
+              <Lock />
+              Lock
+            </Button>
+          )}
+          <Badge variant={badge.variant}>{badge.text}</Badge>
+        </div>
       </header>
 
-      <main className="flex-1 p-4 w-full max-w-2xl mx-auto flex flex-col gap-3">
+      <main className="flex-1 px-6 py-5 w-full max-w-3xl mx-auto flex flex-col gap-4">
         <UpdateBanner />
 
         {phase === 'connecting' && (
-          <p className="text-xs text-muted-foreground text-center py-8">
+          <p className="text-sm text-muted-foreground text-center py-10">
             connecting to vaultd…
           </p>
         )}
@@ -348,9 +367,9 @@ export default function App(): React.ReactElement {
         {phase === 'unlocked' && (
           <>
             <div className="relative">
-              <Search className="size-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
-                className="pl-7"
+                className="pl-9"
                 placeholder="Search records…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -366,20 +385,23 @@ export default function App(): React.ReactElement {
             <div className="flex flex-col gap-2">
               {records.length === 0 ? (
                 <Card>
-                  <CardContent className="text-xs text-muted-foreground text-center py-4">
+                  <CardContent className="text-sm text-muted-foreground text-center py-6">
                     {query.trim() ? 'no matching records' : 'vault is empty'}
                   </CardContent>
                 </Card>
               ) : (
                 records.map((r) => (
-                  <Card key={r.id}>
-                    <CardContent className="flex flex-col gap-2 p-2.5">
-                      <div className="flex items-center gap-2">
+                  <Card
+                    key={r.id}
+                    className="transition-colors hover:border-primary/40"
+                  >
+                    <CardContent className="flex flex-col gap-3 p-4">
+                      <div className="flex items-center gap-3">
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate">
+                          <div className="text-base font-medium truncate">
                             {r.name}
                           </div>
-                          <div className="text-xs text-muted-foreground truncate">
+                          <div className="text-sm text-muted-foreground truncate">
                             {[r.username, r.service, r.environment]
                               .filter(Boolean)
                               .join(' · ')}
@@ -407,17 +429,17 @@ export default function App(): React.ReactElement {
                       </div>
 
                       {revealedId === r.id && secret && (
-                        <div className="flex flex-col gap-1.5 border-t border-border pt-2">
+                        <div className="flex flex-col gap-2 border-t border-border pt-3">
                           {SECRET_LABELS.filter(([field]) => secret[field]).map(
                             ([field, label]) => (
                               <div
                                 key={field}
-                                className="flex items-center gap-2"
+                                className="flex items-center gap-3"
                               >
-                                <span className="text-[11px] uppercase tracking-wide text-muted-foreground w-20 shrink-0">
+                                <span className="text-xs uppercase tracking-wide text-muted-foreground w-20 shrink-0">
                                   {label}
                                 </span>
-                                <code className="flex-1 min-w-0 font-mono text-xs break-all select-all">
+                                <code className="secret flex-1 min-w-0 text-sm break-all select-all rounded bg-muted px-2 py-1">
                                   {secret[field] as string}
                                 </code>
                                 <Button
@@ -441,11 +463,11 @@ export default function App(): React.ReactElement {
                           )}
                           {secret.custom &&
                             Object.entries(secret.custom).map(([k, v]) => (
-                              <div key={k} className="flex items-center gap-2">
-                                <span className="text-[11px] uppercase tracking-wide text-muted-foreground w-20 shrink-0 truncate">
+                              <div key={k} className="flex items-center gap-3">
+                                <span className="text-xs uppercase tracking-wide text-muted-foreground w-20 shrink-0 truncate">
                                   {k}
                                 </span>
-                                <code className="flex-1 min-w-0 font-mono text-xs break-all select-all">
+                                <code className="secret flex-1 min-w-0 text-sm break-all select-all rounded bg-muted px-2 py-1">
                                   {v}
                                 </code>
                                 <Button

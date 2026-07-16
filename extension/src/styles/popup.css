@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+/* The wordmark is Arabic-only, so it can't ride on the UI stack — system
+   Arabic faces differ per platform and none is a display face. Bundled rather
+   than fetched: the CSP forbids remote code and the extension makes no network
+   requests (SIL OFL, see src/styles/fonts/OFL-NotoKufiArabic.txt). Same face
+   as the desktop app. */
+@font-face {
+  font-family: "Noto Kufi Arabic";
+  src: url("./fonts/NotoKufiArabic-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -17,9 +30,14 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-arabic: var(--font-arabic);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -28,57 +46,110 @@
 
 /* ponytail: OS drives the theme; strict CSP forbids the usual pre-paint
    inline script that would set .dark. Light by default, dark under
-   prefers-color-scheme: dark. */
+   prefers-color-scheme: dark.
+
+   These tokens are kept identical to the desktop app
+   (desktop/src/renderer/styles/globals.css) so both surfaces read as one
+   product — change them in both places. Only the root font size below
+   differs, because this is a 360px popup rather than a window.
+
+   Palette sampled from the app icon: the gopher's cyan
+   (#00ADD8 = oklch(0.695 0.13 224)) accents dark mode, the shield's deeper
+   blue (~#04668F) accents light mode where white button text needs the extra
+   contrast, and the neutrals carry the icon's navy hue (~250) at low
+   chroma. */
 :root {
   --radius: 0.5rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo,
+    Consolas, monospace;
+  --font-arabic: "Noto Kufi Arabic", "SF Arabic", "Segoe UI", Tahoma,
+    ui-sans-serif, sans-serif;
+
+  --background: oklch(0.995 0.004 250);
+  --foreground: oklch(0.22 0.02 255);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.22 0.02 255);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --popover-foreground: oklch(0.22 0.02 255);
+  --primary: oklch(0.5 0.13 233);
+  --primary-foreground: oklch(0.99 0.005 250);
+  --secondary: oklch(0.955 0.008 250);
+  --secondary-foreground: oklch(0.28 0.025 255);
+  --muted: oklch(0.955 0.008 250);
+  --muted-foreground: oklch(0.5 0.025 255);
+  --accent: oklch(0.94 0.02 240);
+  --accent-foreground: oklch(0.28 0.025 255);
+  --destructive: oklch(0.55 0.2 27);
+  --destructive-foreground: oklch(0.99 0.005 250);
+  --success: oklch(0.52 0.13 155);
+  --success-foreground: oklch(0.99 0.005 250);
+  --border: oklch(0.9 0.012 250);
+  --input: oklch(0.9 0.012 250);
+  --ring: oklch(0.5 0.13 233);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(1 0 0 / 12%);
-    --input: oklch(1 0 0 / 16%);
-    --ring: oklch(0.556 0 0);
+    --background: oklch(0.18 0.028 250);
+    --foreground: oklch(0.96 0.008 250);
+    --card: oklch(0.225 0.03 251);
+    --card-foreground: oklch(0.96 0.008 250);
+    --popover: oklch(0.225 0.03 251);
+    --popover-foreground: oklch(0.96 0.008 250);
+    --primary: oklch(0.72 0.13 224);
+    --primary-foreground: oklch(0.2 0.04 245);
+    --secondary: oklch(0.28 0.03 252);
+    --secondary-foreground: oklch(0.95 0.008 250);
+    --muted: oklch(0.28 0.03 252);
+    --muted-foreground: oklch(0.73 0.02 250);
+    --accent: oklch(0.32 0.035 245);
+    --accent-foreground: oklch(0.96 0.008 250);
+    --destructive: oklch(0.68 0.18 25);
+    --destructive-foreground: oklch(0.18 0.03 250);
+    --success: oklch(0.72 0.14 158);
+    --success-foreground: oklch(0.18 0.03 250);
+    --border: oklch(1 0 0 / 11%);
+    --input: oklch(1 0 0 / 14%);
+    --ring: oklch(0.72 0.13 224);
   }
 }
 
-html,
+/* Tailwind's sizes are rem-based, so the root size is the type scale. 15px
+   keeps the popup's text legible while still fitting a 360px panel; the
+   desktop window uses the 16px browser default. */
+html {
+  font-size: 15px;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
-  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Secrets get read character-by-character and retyped, so they get a real
+   mono face with slashed zero and tabular figures: 0/O and 1/l stay
+   distinguishable, and ligatures never fuse a password's glyphs. */
+.secret {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero" 1, "tnum" 1;
+  font-variant-ligatures: none;
+  letter-spacing: 0.01em;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--primary) 28%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
 }

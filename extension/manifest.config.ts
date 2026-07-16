@@ -13,6 +13,13 @@ export default defineManifest({
   description: 'Local-only encrypted secrets manager. Talks to vaultd end-to-end encrypted.',
   permissions: ['nativeMessaging', 'activeTab', 'storage', 'scripting'],
   host_permissions: [],
+  // Served from public/, so crxjs copies them to the bundle root.
+  icons: {
+    16: 'icons/16.png',
+    32: 'icons/32.png',
+    48: 'icons/48.png',
+    128: 'icons/128.png',
+  },
   background: {
     service_worker: 'src/background/index.ts',
     type: 'module',
@@ -20,6 +27,12 @@ export default defineManifest({
   action: {
     default_popup: 'src/popup/index.html',
     default_title: 'albear',
+    default_icon: {
+      16: 'icons/16.png',
+      32: 'icons/32.png',
+      48: 'icons/48.png',
+      128: 'icons/128.png',
+    },
   },
   content_scripts: [
     {
