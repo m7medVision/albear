@@ -3,10 +3,11 @@
 // Go by the vector tests). Exercises handshake, pinning, request/response,
 // relay errors, and tamper handling.
 import { describe, expect, it } from 'vitest'
-import { hmac } from '@noble/hashes/hmac'
-import { sha256 } from '@noble/hashes/sha256'
-import { x25519 } from '@noble/curves/ed25519'
-import { chacha20poly1305 } from '@noble/ciphers/chacha'
+import { hmac } from '@noble/hashes/hmac.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+// See extension/src/noise/noise.ts for why these use explicit .js subpaths.
+import { x25519 } from '@noble/curves/ed25519.js'
+import { chacha20poly1305 } from '@noble/ciphers/chacha.js'
 import { generateKeyPair, type KeyPair } from '../src/noise/noise'
 import {
   VaultError,
