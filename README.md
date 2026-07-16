@@ -25,6 +25,21 @@ flowchart LR
 
 The relay only ever sees ciphertext — it cannot read or forge traffic.
 
+## Screenshots
+
+<p align="center">
+  <img src="img/2.png" width="820" alt="Albear desktop app showing the unlocked vault">
+</p>
+
+<p align="center">
+  <img src="img/1.png" width="820" alt="Albear desktop app master password unlock screen">
+</p>
+
+<p align="center">
+  <img src="img/3.png" width="390" alt="Albear browser extension with no matching login">
+  <img src="img/4.png" width="390" alt="Albear browser extension ready to fill a matching login">
+</p>
+
 ## Install
 
 Linux only, on amd64 and arm64. `vaultd` authorizes clients by checking the
