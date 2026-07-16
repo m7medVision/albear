@@ -16,10 +16,10 @@ type Paths struct {
 	RuntimeDir string
 }
 
-func (p Paths) Database() string   { return filepath.Join(p.DataDir, "vault.db") }
-func (p Paths) Socket() string     { return filepath.Join(p.RuntimeDir, "vault.sock") }
-func (p Paths) StaticKey() string  { return filepath.Join(p.ConfigDir, "daemon.key") }
-func (p Paths) ClientDir() string  { return filepath.Join(p.ConfigDir, "clients") }
+func (p Paths) Database() string  { return filepath.Join(p.DataDir, "vault.db") }
+func (p Paths) Socket() string    { return filepath.Join(p.RuntimeDir, "vault.sock") }
+func (p Paths) StaticKey() string { return filepath.Join(p.ConfigDir, "daemon.key") }
+func (p Paths) ClientDir() string { return filepath.Join(p.ConfigDir, "clients") }
 
 // ResolvePaths applies the XDG spec with home fallbacks.
 func ResolvePaths() (Paths, error) {

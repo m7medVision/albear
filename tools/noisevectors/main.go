@@ -43,18 +43,18 @@ func firstBlock(seed string) []byte {
 }
 
 type vector struct {
-	Name          string   `json:"name"`
-	PSK           string   `json:"psk,omitempty"`
-	Prologue      string   `json:"prologue"`
-	InitStaticPriv string  `json:"initStaticPriv"`
-	RespStaticPriv string  `json:"respStaticPriv"`
-	RespStaticPub  string  `json:"respStaticPub"`
-	InitEphPriv    string  `json:"initEphPriv"`
-	Messages       []string `json:"messages"`
-	TransportToResp string  `json:"transportToResp"`
-	TransportToInit string  `json:"transportToInit"`
-	TransportToRespPlain string `json:"transportToRespPlain"`
-	TransportToInitPlain string `json:"transportToInitPlain"`
+	Name                 string   `json:"name"`
+	PSK                  string   `json:"psk,omitempty"`
+	Prologue             string   `json:"prologue"`
+	InitStaticPriv       string   `json:"initStaticPriv"`
+	RespStaticPriv       string   `json:"respStaticPriv"`
+	RespStaticPub        string   `json:"respStaticPub"`
+	InitEphPriv          string   `json:"initEphPriv"`
+	Messages             []string `json:"messages"`
+	TransportToResp      string   `json:"transportToResp"`
+	TransportToInit      string   `json:"transportToInit"`
+	TransportToRespPlain string   `json:"transportToRespPlain"`
+	TransportToInitPlain string   `json:"transportToInitPlain"`
 }
 
 func generate(name string, psk []byte) vector {
@@ -119,8 +119,8 @@ func generate(name string, psk []byte) vector {
 	}
 
 	v := vector{
-		Name:          name,
-		Prologue:      hex.EncodeToString(prologue),
+		Name:           name,
+		Prologue:       hex.EncodeToString(prologue),
 		InitStaticPriv: hex.EncodeToString(initStatic.Private),
 		RespStaticPriv: hex.EncodeToString(respStatic.Private),
 		RespStaticPub:  hex.EncodeToString(respStatic.Public),

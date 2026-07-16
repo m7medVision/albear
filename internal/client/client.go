@@ -123,8 +123,8 @@ type Identity struct {
 	StaticPrivate   string `json:"staticPrivate"`
 }
 
-func (i Identity) CredentialBytes() ([]byte, error)  { return hex.DecodeString(i.Credential) }
-func (i Identity) DaemonKeyBytes() ([]byte, error)   { return hex.DecodeString(i.DaemonStaticKey) }
+func (i Identity) CredentialBytes() ([]byte, error) { return hex.DecodeString(i.Credential) }
+func (i Identity) DaemonKeyBytes() ([]byte, error)  { return hex.DecodeString(i.DaemonStaticKey) }
 func (i Identity) StaticKey() (flynnnoise.DHKey, error) {
 	pub, err := hex.DecodeString(i.StaticPublic)
 	if err != nil {

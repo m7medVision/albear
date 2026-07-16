@@ -12,7 +12,7 @@ import (
 // Linux-only today; the OS gate lives here, not in the generic Install.
 type Chrome struct{}
 
-func (Chrome) Name() string { return "chrome" }
+func (Chrome) Name() string        { return "chrome" }
 func (Chrome) ExtensionID() string { return ChromeExtensionID }
 
 func (Chrome) ManifestPath() (string, error) {

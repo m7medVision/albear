@@ -89,8 +89,8 @@ func TestFullLifecycleOverSocket(t *testing.T) {
 	c := cliConn(t, d)
 
 	var status struct {
-		Initialized bool `json:"initialized"`
-		Unlocked    bool `json:"unlocked"`
+		Initialized bool  `json:"initialized"`
+		Unlocked    bool  `json:"unlocked"`
 		RecordCount int64 `json:"recordCount"`
 	}
 	if err := c.Call("vault.status", nil, &status); err != nil {

@@ -182,10 +182,10 @@ func fieldsToDomain(f recordFields) (domain.RecordMetadata, domain.SecretPayload
 		URLs: urls, Tags: f.Tags, CustomKeys: customKeys,
 	}
 	secret := domain.SecretPayload{
-		Password: shared.NewSecretFromString(f.Password),
-		Notes:    shared.NewSecretFromString(f.Notes),
-		APIKey:   shared.NewSecretFromString(f.APIKey),
-		APISecret: shared.NewSecretFromString(f.APISecret),
+		Password:     shared.NewSecretFromString(f.Password),
+		Notes:        shared.NewSecretFromString(f.Notes),
+		APIKey:       shared.NewSecretFromString(f.APIKey),
+		APISecret:    shared.NewSecretFromString(f.APISecret),
 		CustomValues: custom,
 	}
 	return meta, secret, nil

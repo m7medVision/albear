@@ -97,10 +97,10 @@ func decodeSecret(b []byte) (domain.SecretPayload, error) {
 		custom = nil
 	}
 	return domain.SecretPayload{
-		Password: shared.NewSecretFromString(dto.Password),
-		Notes:    shared.NewSecretFromString(dto.Notes),
-		APIKey:   shared.NewSecretFromString(dto.APIKey),
-		APISecret: shared.NewSecretFromString(dto.APISecret),
+		Password:     shared.NewSecretFromString(dto.Password),
+		Notes:        shared.NewSecretFromString(dto.Notes),
+		APIKey:       shared.NewSecretFromString(dto.APIKey),
+		APISecret:    shared.NewSecretFromString(dto.APISecret),
 		CustomValues: custom,
 	}, nil
 }

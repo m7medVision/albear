@@ -21,10 +21,10 @@ const (
 )
 
 var (
-	ErrHandshakeFailed    = errors.New("noise: handshake failed")
-	ErrStaticKeyMismatch  = errors.New("noise: static key does not match pinned key")
-	ErrUnknownMode        = errors.New("noise: unknown handshake mode")
-	ErrProtocolViolation  = errors.New("noise: protocol violation")
+	ErrHandshakeFailed   = errors.New("noise: handshake failed")
+	ErrStaticKeyMismatch = errors.New("noise: static key does not match pinned key")
+	ErrUnknownMode       = errors.New("noise: unknown handshake mode")
+	ErrProtocolViolation = errors.New("noise: protocol violation")
 )
 
 // Hello is the plaintext first frame. It carries no secrets: only which

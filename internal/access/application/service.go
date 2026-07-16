@@ -156,11 +156,11 @@ func (s *Service) Approve(ctx context.Context, pairingID shared.ID) error {
 
 	err = s.store.Command(ctx, func(c *command.Queries) error {
 		return c.InsertClient(ctx, command.InsertClientParams{
-			ClientID:       clientIDBytes,
-			ClientKind:     int64(p.Kind),
-			Status:         int64(domain.StatusApproved),
-			CapabilityMask: int64(domain.DefaultCapabilities(p.Kind)),
-			CredentialHash: crypto.CredentialVerifier(credential),
+			ClientID:          clientIDBytes,
+			ClientKind:        int64(p.Kind),
+			Status:            int64(domain.StatusApproved),
+			CapabilityMask:    int64(domain.DefaultCapabilities(p.Kind)),
+			CredentialHash:    crypto.CredentialVerifier(credential),
 			NoiseStaticPubkey: p.StaticKey,
 			LabelNonce:        labelNonce,
 			LabelCiphertext:   labelCT,

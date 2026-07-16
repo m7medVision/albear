@@ -25,15 +25,15 @@ func (t RecordType) Valid() bool {
 // RecordMetadata is the searchable half of a record. It is encrypted at rest
 // but decrypted into the in-memory index while the vault is unlocked.
 type RecordMetadata struct {
-	Name       string
-	Username   string
-	Service    string
+	Name        string
+	Username    string
+	Service     string
 	Environment string
-	URLs       []LoginURL
-	Tags       []string
-	CustomKeys []string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	URLs        []LoginURL
+	Tags        []string
+	CustomKeys  []string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // SecretPayload is the on-demand half. It is decrypted only for an explicit
