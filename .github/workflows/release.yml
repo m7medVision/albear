@@ -1,39 +1,145 @@
-# Unified release: pushing one tag vX.Y.Z produces ONE GitHub release that
-# carries the Go binaries (plus deb/rpm and checksums), the extension zip, and
-# the Linux desktop installer.
+# Unified release. Two channels, tags generated automatically:
 #
-# GoReleaser creates the release as a draft, so the extension and desktop jobs
-# can attach to it in parallel; it is published (un-drafted) only after every
-# artifact job succeeds. update.Checker reads /releases/latest, which GitHub
-# excludes drafts and prereleases from, so a half-built release is never
-# advertised to users.
+#   push to main    -> vX.Y.Z-rc.N   pre-release  (invisible to users)
+#   push to stable  -> vX.Y.Z        stable       (becomes /releases/latest)
 #
-# Linux-only by design — see the header of .goreleaser.yaml.
+# Promote a tested rc by fast-forwarding stable onto main:
 #
-# All gh CLI calls target the current repository ($GITHUB_REPOSITORY).
-# electron-builder's publish target (owner/repo) lives in desktop/package.json
-# under the "build.publish" key and must match this repo.
+#   git push origin main:stable
+#
+# Keep that a fast-forward. The stable tag must sit on a commit that is also in
+# main's history, or the next rc on main will not see it and will renumber from
+# the wrong base.
+#
+# One tag produces ONE GitHub release carrying the Go binaries (plus deb/rpm and
+# checksums), the extension zip, and the Linux desktop installer. GoReleaser
+# creates it as a draft so the artifact jobs can attach in parallel; it is
+# published only after every one of them succeeds. update.Checker reads
+# /releases/latest, which GitHub excludes drafts and prereleases from, so a
+# half-built or -rc release is never advertised.
+#
+# Tagging happens inside this workflow on purpose. A separate workflow pushing
+# tags with GITHUB_TOKEN would create the tag but never trigger this one --
+# events raised by GITHUB_TOKEN do not start new workflow runs -- and the
+# alternative is a long-lived write-scoped PAT, which this repo should not carry.
+#
+# Linux-only by design; see the header of .goreleaser.yaml.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main, stable]
+    tags: ["v*"] # escape hatch: a hand-pushed tag still releases
 
 permissions:
   contents: write
 
+# Serialize per branch: two quick merges must not race to claim the same rc
+# number. Never cancel — a half-published release is worse than a slow queue.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  goreleaser:
-    name: Go binaries, packages, draft release
+  version:
+    name: Resolve version
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write      # provenance attestation
-      attestations: write
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      release: ${{ steps.resolve.outputs.release }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # goreleaser needs full history for the changelog
+          fetch-depth: 0 # svu reads the whole history
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install svu
+        run: go install github.com/caarlos0/svu/v3@v3.4.1
+
+      - name: Resolve tag
+        id: resolve
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [ "$REF_TYPE" = "tag" ]; then
+            echo "tag=$REF_NAME" >>"$GITHUB_OUTPUT"
+            echo "release=true" >>"$GITHUB_OUTPUT"
+            echo "Hand-pushed tag $REF_NAME; releasing it as-is."
+            exit 0
+          fi
+
+          last=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          range=${last:+$last..HEAD}
+
+          # On main, skip merges that release nothing. svu bumps only on feat:,
+          # fix: and any type!: — mirror that exactly, or a docs/ci/chore merge
+          # would cut an rc byte-identical to the previous one.
+          if [ "$REF_NAME" != "stable" ] &&
+             ! git log --format='%s' $range |
+               grep -qE '^(feat|fix)(\([^)]*\))?!?:|^[a-zA-Z]+(\([^)]*\))?!:'; then
+            echo "release=false" >>"$GITHUB_OUTPUT"
+            echo "No feat/fix/breaking commits since ${last:-the start}; skipping."
+            exit 0
+          fi
+
+          # The base version both channels aim at, derived from the last STABLE
+          # tag over every commit since it.
+          #
+          # svu bumps from the most recent tag, but an rc is the release being
+          # built, not a released version. Left visible, each merge would re-bump
+          # off the previous rc (v0.1.0-rc.1 -> v0.2.0-rc.1 -> v0.3.0-rc.1...)
+          # and rc.2 would never exist. --tag.pattern is a glob and cannot
+          # express "no hyphen", so hide the rc tags from svu instead. This only
+          # touches the runner's throwaway clone, and only the one new tag is
+          # ever pushed.
+          rc_tags=$(git tag -l '*-rc.*')
+          [ -z "$rc_tags" ] || git tag -d $rc_tags >/dev/null
+          base=$(svu next --v0 --tag.mode=current)
+
+          if [ "$REF_NAME" = "stable" ]; then
+            tag="$base"
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "release=false" >>"$GITHUB_OUTPUT"
+              echo "$tag is already tagged; nothing to promote."
+              exit 0
+            fi
+          else
+            # Highest existing rc for this base, +1. Counting them would
+            # misnumber if one were ever deleted. `|| true` because the first rc
+            # of any base greps nothing, and pipefail would abort the step.
+            n=$(printf '%s\n' "$rc_tags" | grep "^${base}-rc\." |
+                sed "s|^${base}-rc\.||" | sort -n | tail -1 || true)
+            tag="${base}-rc.$(( ${n:-0} + 1 ))"
+          fi
+
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          echo "Tagging $tag"
+
+          git tag "$tag"
+          git push origin "$tag"
+
+  goreleaser:
+    name: Go binaries, packages, draft release
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write # provenance attestation
+      attestations: write
+    steps:
+      # Pin every job to the tagged commit: main may move while this runs.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          fetch-depth: 0 # goreleaser needs full history for the changelog
 
       - uses: actions/setup-go@v5
         with:
@@ -62,12 +168,14 @@ jobs:
 
   extension:
     name: Extension zip
-    needs: goreleaser
+    needs: [version, goreleaser]
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ needs.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -86,7 +194,7 @@ jobs:
       # The checked-in manifest version is a dev placeholder; stamp the tag
       # version into it at build time so the packaged extension reports the
       # released version. Chrome requires plain dotted integers, so any
-      # pre-release/build suffix (e.g. v1.2.3-rc1) is stripped for the
+      # pre-release/build suffix (e.g. v1.2.3-rc.1) is stripped for the
       # manifest only — the zip filename still carries the full tag.
       - name: Sync manifest version from tag
         working-directory: extension
@@ -114,7 +222,7 @@ jobs:
 
   desktop:
     name: Desktop installer (linux)
-    needs: goreleaser
+    needs: [version, goreleaser]
     # Linux only: the app dials a Unix socket under $XDG_RUNTIME_DIR served by
     # vaultd, which has no macOS/Windows build. A .dmg or .exe would install an
     # app that can never connect.
@@ -124,9 +232,11 @@ jobs:
         shell: bash
         working-directory: desktop
     env:
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ needs.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
@@ -158,16 +268,17 @@ jobs:
 
   publish:
     name: Publish release
-    needs: [extension, desktop]
+    needs: [version, extension, desktop]
     runs-on: ubuntu-latest
     steps:
       - name: Un-draft the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
-          # --latest only for stable tags: a prerelease must never become the
-          # answer to /releases/latest, which drives the CLI update notice.
+          # --latest only for stable tags: a pre-release must never become the
+          # answer to /releases/latest, which drives the CLI update notice and
+          # the version install.sh resolves.
           if [[ "$TAG" == *-* ]]; then
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false
           else
