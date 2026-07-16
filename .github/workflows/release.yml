@@ -1,29 +1,5 @@
-# Unified release. Two channels, tags generated automatically:
-#
-#   push to main    -> vX.Y.Z-rc.N   pre-release  (invisible to users)
-#   push to stable  -> vX.Y.Z        stable       (becomes /releases/latest)
-#
-# Promote a tested rc by fast-forwarding stable onto main:
-#
-#   git push origin main:stable
-#
-# Keep that a fast-forward. The stable tag must sit on a commit that is also in
-# main's history, or the next rc on main will not see it and will renumber from
-# the wrong base.
-#
-# One tag produces ONE GitHub release carrying the Go binaries (plus deb/rpm and
-# checksums), the extension zip, and the Linux desktop installer. GoReleaser
-# creates it as a draft so the artifact jobs can attach in parallel; it is
-# published only after every one of them succeeds. update.Checker reads
-# /releases/latest, which GitHub excludes drafts and prereleases from, so a
-# half-built or -rc release is never advertised.
-#
-# Tagging happens inside this workflow on purpose. A separate workflow pushing
-# tags with GITHUB_TOKEN would create the tag but never trigger this one --
-# events raised by GITHUB_TOKEN do not start new workflow runs -- and the
-# alternative is a long-lived write-scoped PAT, which this repo should not carry.
-#
-# Linux-only by design; see the header of .goreleaser.yaml.
+# main -> vX.Y.Z-rc.N (prerelease) | stable -> vX.Y.Z (latest)
+# Promote with: git push origin main:stable   (keep it a fast-forward)
 name: Release
 
 on:
@@ -34,8 +10,7 @@ on:
 permissions:
   contents: write
 
-# Serialize per branch: two quick merges must not race to claim the same rc
-# number. Never cancel — a half-published release is worse than a slow queue.
+# Never cancel: a half-published release is worse than a slow queue.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -77,27 +52,21 @@ jobs:
           last=$(git describe --tags --abbrev=0 2>/dev/null || true)
           range=${last:+$last..HEAD}
 
-          # On main, skip merges that release nothing. svu bumps only on feat:,
-          # fix: and any type!: — mirror that exactly, or a docs/ci/chore merge
-          # would cut an rc byte-identical to the previous one.
+          # Mirror svu: only feat:, fix: and any type!: release anything.
+          # Here-string, not a pipe: `git log | grep -q` dies on SIGPIPE (141)
+          # when grep matches early, and pipefail turns that win into a skip.
+          subjects=$(git log --format='%s' $range)
           if [ "$REF_NAME" != "stable" ] &&
-             ! git log --format='%s' $range |
-               grep -qE '^(feat|fix)(\([^)]*\))?!?:|^[a-zA-Z]+(\([^)]*\))?!:'; then
+             ! grep -qE '^(feat|fix)(\([^)]*\))?!?:|^[a-zA-Z]+(\([^)]*\))?!:' \
+                 <<<"$subjects"; then
             echo "release=false" >>"$GITHUB_OUTPUT"
             echo "No feat/fix/breaking commits since ${last:-the start}; skipping."
             exit 0
           fi
 
-          # The base version both channels aim at, derived from the last STABLE
-          # tag over every commit since it.
-          #
-          # svu bumps from the most recent tag, but an rc is the release being
-          # built, not a released version. Left visible, each merge would re-bump
-          # off the previous rc (v0.1.0-rc.1 -> v0.2.0-rc.1 -> v0.3.0-rc.1...)
-          # and rc.2 would never exist. --tag.pattern is a glob and cannot
-          # express "no hyphen", so hide the rc tags from svu instead. This only
-          # touches the runner's throwaway clone, and only the one new tag is
-          # ever pushed.
+          # Hide rc tags from svu so base comes off the last STABLE tag —
+          # otherwise every merge re-bumps off the previous rc and rc.2 never
+          # exists. Local to the runner's clone; only the new tag is pushed.
           rc_tags=$(git tag -l '*-rc.*')
           [ -z "$rc_tags" ] || git tag -d $rc_tags >/dev/null
           base=$(svu next --v0 --tag.mode=current)
@@ -110,9 +79,8 @@ jobs:
               exit 0
             fi
           else
-            # Highest existing rc for this base, +1. Counting them would
-            # misnumber if one were ever deleted. `|| true` because the first rc
-            # of any base greps nothing, and pipefail would abort the step.
+            # Highest existing rc +1 (counting would misnumber after a delete).
+            # `|| true`: the first rc of a base greps nothing and pipefail aborts.
             n=$(printf '%s\n' "$rc_tags" | grep "^${base}-rc\." |
                 sed "s|^${base}-rc\.||" | sort -n | tail -1 || true)
             tag="${base}-rc.$(( ${n:-0} + 1 ))"
@@ -122,6 +90,9 @@ jobs:
           echo "release=true" >>"$GITHUB_OUTPUT"
           echo "Tagging $tag"
 
+          # Tag from inside this workflow, not a separate one: tags pushed with
+          # GITHUB_TOKEN do not trigger workflow runs, and the alternative is a
+          # long-lived write-scoped PAT this repo should not carry.
           git tag "$tag"
           git push origin "$tag"
 
@@ -135,7 +106,7 @@ jobs:
       id-token: write # provenance attestation
       attestations: write
     steps:
-      # Pin every job to the tagged commit: main may move while this runs.
+      # ref: the tag, not the branch — main may move while this runs.
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.tag }}
@@ -145,9 +116,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Creates the draft release and uploads tarballs, deb/rpm, checksums.
-      # Cross-compiles on this one runner: modernc.org/sqlite is pure Go, so
-      # CGO_ENABLED=0 needs no C toolchain and no per-arch runner.
+      # Creates the DRAFT release; the jobs below attach to it.
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
@@ -155,9 +124,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Signed, verifiable provenance for the artifacts users actually install.
-      # Worth more than the checksums file alone, which is served from the same
-      # origin as the binaries it describes.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
@@ -191,11 +157,8 @@ jobs:
         working-directory: extension
         run: pnpm install --frozen-lockfile
 
-      # The checked-in manifest version is a dev placeholder; stamp the tag
-      # version into it at build time so the packaged extension reports the
-      # released version. Chrome requires plain dotted integers, so any
-      # pre-release/build suffix (e.g. v1.2.3-rc.1) is stripped for the
-      # manifest only — the zip filename still carries the full tag.
+      # Chrome requires plain dotted integers, so the -rc.N/+build suffix is
+      # stripped for the manifest only; the zip filename keeps the full tag.
       - name: Sync manifest version from tag
         working-directory: extension
         run: |
@@ -223,9 +186,7 @@ jobs:
   desktop:
     name: Desktop installer (linux)
     needs: [version, goreleaser]
-    # Linux only: the app dials a Unix socket under $XDG_RUNTIME_DIR served by
-    # vaultd, which has no macOS/Windows build. A .dmg or .exe would install an
-    # app that can never connect.
+    # Linux only: the app dials a vaultd socket that has no macOS/Windows build.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -252,12 +213,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # electron-builder (--publish always + GH_TOKEN) uploads the AppImage and
-      # the electron-updater feed file (latest-linux.yml) to the existing draft
-      # release for this tag (it matches the draft by tag, derived from the
-      # synced app version). Deliberately NOT `npm run package`: that script
-      # hardcodes `--publish never` and npm appends extra args to the wrong
-      # command in the chain.
+      # NOT `npm run package`: that script hardcodes `--publish never` and npm
+      # appends extra args to the wrong command in the chain.
       - name: Package and publish installer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -276,9 +233,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.version.outputs.tag }}
         run: |
-          # --latest only for stable tags: a pre-release must never become the
-          # answer to /releases/latest, which drives the CLI update notice and
-          # the version install.sh resolves.
+          # --latest for stable only: /releases/latest drives the CLI update
+          # notice and install.sh, and must never answer with a prerelease.
           if [[ "$TAG" == *-* ]]; then
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false
           else
