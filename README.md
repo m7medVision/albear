@@ -25,7 +25,53 @@ flowchart LR
 
 The relay only ever sees ciphertext — it cannot read or forge traffic.
 
+## Install
+
+Linux only, on amd64 and arm64. `vaultd` authorizes clients by checking the
+socket peer's credentials, so there is no macOS or Windows build.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/m7medVision/albear/main/install.sh | sh
+```
+
+That installs `vaultd`, `vault` and `vault-native` into `~/.local/bin` and adds a
+systemd user unit. Set `ALBEAR_INSTALL_DIR` to install elsewhere,
+`ALBEAR_VERSION` to pin a tag, or `ALBEAR_NO_SERVICE=1` to skip the unit.
+
+Prefer a package? Grab the `.deb` or `.rpm` from the
+[latest release](https://github.com/m7medVision/albear/releases/latest):
+
+```sh
+sudo dpkg -i albear_*_linux_amd64.deb    # or: sudo rpm -i albear_*_linux_amd64.rpm
+```
+
+Or install the binaries with Go:
+
+```sh
+go install github.com/m7medVision/albear/cmd/vaultd@latest
+go install github.com/m7medVision/albear/cmd/vault@latest
+go install github.com/m7medVision/albear/cmd/vault-native@latest
+```
+
+Then start the daemon and create your vault:
+
+```sh
+systemctl --user enable --now albear-vaultd   # or just: vaultd &
+vault init                                    # no recovery without a backup!
+```
+
+Every release also ships `checksums.txt` and signed build provenance, which you
+can verify with:
+
+```sh
+gh attestation verify albear_v1.2.3_linux_amd64.tar.gz -R m7medVision/albear
+```
+
+The desktop app (AppImage) and the extension zip are attached to the same release.
+
 ## Build
+
+Building from source is for development — see [Install](#install) to just use it.
 
 ```sh
 go build ./cmd/...                       # vaultd, vault, vault-native
