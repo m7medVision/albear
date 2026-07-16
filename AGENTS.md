@@ -180,8 +180,6 @@ desktop/           Electron (npm, electron-react-boilerplate)
   src/main/        main process: vaultClient.ts, noise.ts, frames.ts, ipc.ts
   src/renderer/    React UI
   src/shared/      DTOs shared main↔renderer
-docs/              PRD + threat model, cryptography, database format,
-                   native messaging, releasing
 ```
 
 ## Commands
@@ -221,8 +219,7 @@ Fuzz targets (`go test -fuzz=<Name> -fuzztime=30s -run='^$' <pkg>`):
 - Comments explain *why* a constraint exists, not what the line does.
 - Tests sit beside the code (`*_test.go`, `tests/` in the extension).
 - Releases are unified: one `vX.Y.Z` tag builds Go binaries, the extension
-  zip, and desktop installers into a single GitHub release. See
-  `docs/releasing.md`.
+  zip, and desktop installers into a single GitHub release.
 
 ## Gotchas
 

@@ -1,27 +1,37 @@
 # albear — البير
 
-A local-only encrypted secrets manager: a Go daemon (`vaultd`), a CLI
-(`vault`), and a Chrome extension connected through a blind native-messaging
-relay (`vault-native`). Every client↔daemon channel is end-to-end encrypted
-with the Noise Protocol Framework — including the browser path, where the
-relay only ever sees ciphertext.
+Local-only encrypted secrets manager. No cloud, no telemetry, no network
+listeners — one Go daemon owns the vault; every client talks to it over a
+Unix socket on a separately end-to-end encrypted (Noise) channel.
 
-No cloud. No telemetry. No network listeners. See `docs/PRD.md` for the full
-product definition and `docs/{threat-model,cryptography,database-format,native-messaging}.md`
-for the security design.
+```mermaid
+flowchart LR
+    CLI["vault<br/>CLI"]:::c -->|Noise E2E| D(("vaultd")):::d
+    EXT["Chrome<br/>extension"]:::c -->|ciphertext| RELAY["vault-native<br/>blind relay"]:::r
+    DESK["Desktop<br/>(Electron)"]:::c -->|Noise E2E| D
+    RELAY -->|forwards bytes| D
+    D -->|encrypted| DB[("sqlite vault")]:::s
+    classDef c fill:#cfe,stroke:#393;
+    classDef r fill:#fec,stroke:#a83;
+    classDef d fill:#cde,stroke:#369;
+    classDef s fill:#eee,stroke:#999;
+```
+
+The relay only ever sees ciphertext — it cannot read or forge traffic.
 
 ## Build
 
 ```sh
-go build ./cmd/...            # vaultd, vault, vault-native
-cd extension && pnpm install && pnpm build   # crxjs → extension/dist
+go build ./cmd/...                       # vaultd, vault, vault-native
+cd extension && pnpm install && pnpm build
+cd desktop && npm install && npm run build
 ```
 
 ## Run
 
 ```sh
-./vaultd &                    # serves $XDG_RUNTIME_DIR/albear/vault.sock
-./vault init                  # create the vault (no recovery without backup!)
+./vaultd &                              # serves $XDG_RUNTIME_DIR/albear/vault.sock
+./vault init                            # create the vault (no recovery without backup!)
 ./vault unlock
 ./vault add login --name GitHub --username you --url https://github.com --generate
 ./vault list
@@ -29,35 +39,18 @@ cd extension && pnpm install && pnpm build   # crxjs → extension/dist
 ./vault backup create ~/albear.abk
 ```
 
-## Chrome extension
-
-1. Build: `go build ./cmd/...` and `cd extension && pnpm build`.
-2. Install the native host for Chrome: `./vault install chrome`.
-3. Open `chrome://extensions`, enable Developer mode, choose *Load unpacked*,
-   and select the printed `extension/dist` path.
-4. Open the popup → *Pair with vaultd* → run `vault clients approve` in a
-   terminal → confirm the phrases match on both sides.
-5. Unlock from the popup; matching logins for the current site appear; *Fill*
-   requires an explicit click and an exact origin match, verified daemon-side.
-
 ## Tests
 
 ```sh
-go test ./...                              # all Go suites (unit + socket integration)
-cd extension && pnpm test                  # TS: Noise Go-interop vectors, transport, forms
-go run ./tools/noisevectors extension/src/noise/testdata/vectors.json  # regenerate interop vectors
+go test ./...
+cd extension && pnpm test
+cd desktop && npm test
 ```
 
-Fuzz targets (run with `go test -fuzz=<Name> -fuzztime=30s -run='^$' <pkg>`):
-`FuzzParseOrigin`, `FuzzDecodeMetadata`, `FuzzDecodeSecret`,
-`FuzzParseContainer`, `FuzzReadNativeMessage`, `FuzzReadFrame`,
-`FuzzServerHandshakeHello`.
-
-## Architecture invariants
+## Invariants
 
 - Only `vaultd` opens the database; plaintext never touches disk.
-- CQRS with sqlc: `sql/commands.sql` (writes) and `sql/queries.sql` (reads)
-  are the only SQL in the project — simple single-statement queries.
+- CQRS with sqlc: `sql/commands.sql` (writes) and `sql/queries.sql` (reads) — single-statement only.
 - Domain packages import no SQL, HTTP, Chrome, or CLI machinery.
 - Sessions are memory-only, epoch-bound, and die on lock or restart.
 - Suspicious activity locks the vault; nothing automatic ever deletes it.
