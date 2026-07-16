@@ -1,6 +1,6 @@
 GO_BIN := vaultd vault vault-native
 
-.PHONY: all build devd dev-ext dev-desktop extension test test-go test-ext cover fuzz vet sqlc vectors clean
+.PHONY: all build devd dev-ext dev-desktop extension test test-go test-ext cover fuzz lint vet sqlc vectors clean
 
 all: build extension
 
@@ -39,6 +39,9 @@ fuzz:
 	go test -fuzz='^FuzzReadNativeMessage$$' -fuzztime=30s -run='^$$' ./internal/native
 	go test -fuzz='^FuzzReadFrame$$' -fuzztime=30s -run='^$$' ./internal/infrastructure/transport/noise
 	go test -fuzz='^FuzzServerHandshakeHello$$' -fuzztime=30s -run='^$$' ./internal/infrastructure/transport/noise
+
+lint:
+	golangci-lint run ./...
 
 vet:
 	go vet ./...
