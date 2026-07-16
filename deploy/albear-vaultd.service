@@ -1,0 +1,20 @@
+[Unit]
+Description=Albear vault daemon
+Documentation=https://github.com/m7medVision/albear
+
+# A user unit, not a system one: vaultd authorizes CLI clients by checking the
+# socket peer's credentials against its own uid, and owns a per-user socket
+# under $XDG_RUNTIME_DIR. One shared system daemon could not make that check.
+[Service]
+Type=simple
+ExecStart=/usr/bin/vaultd
+Restart=on-failure
+
+# vaultd already sets PR_SET_DUMPABLE=0 and RLIMIT_CORE=0 itself. Hardening
+# stays light on purpose: the daemon reads and writes the vault under
+# $XDG_DATA_HOME and $XDG_CONFIG_HOME, so ProtectHome= would break it.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

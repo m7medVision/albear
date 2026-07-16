@@ -6,6 +6,10 @@
 *.out
 coverage.*
 
+# Release artifacts (goreleaser output; also the extension zip it attaches)
+/dist/
+/albear-extension-*.zip
+
 # Node
 node_modules/
 extension/dist/
