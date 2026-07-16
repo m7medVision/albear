@@ -80,9 +80,14 @@ jobs:
           # On main, skip merges that release nothing. svu bumps only on feat:,
           # fix: and any type!: — mirror that exactly, or a docs/ci/chore merge
           # would cut an rc byte-identical to the previous one.
+          #
+          # Match off a here-string, not a pipe: `git log | grep -q` dies on
+          # SIGPIPE (141) the moment grep matches early, and pipefail turns that
+          # win into a "no matches" skip.
+          subjects=$(git log --format='%s' $range)
           if [ "$REF_NAME" != "stable" ] &&
-             ! git log --format='%s' $range |
-               grep -qE '^(feat|fix)(\([^)]*\))?!?:|^[a-zA-Z]+(\([^)]*\))?!:'; then
+             ! grep -qE '^(feat|fix)(\([^)]*\))?!?:|^[a-zA-Z]+(\([^)]*\))?!:' \
+                 <<<"$subjects"; then
             echo "release=false" >>"$GITHUB_OUTPUT"
             echo "No feat/fix/breaking commits since ${last:-the start}; skipping."
             exit 0
