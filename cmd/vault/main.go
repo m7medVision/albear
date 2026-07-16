@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,6 +18,8 @@ import (
 	"albear/internal/client"
 	"albear/internal/infrastructure/system"
 	"albear/internal/install"
+	"albear/internal/update"
+	"albear/internal/version"
 )
 
 // Exit codes (PRD 14.4).
@@ -41,7 +44,21 @@ func run(args []string) int {
 		return exitUsage
 	}
 	cmd, rest := args[0], args[1:]
+	if cmd == "version" || cmd == "--version" {
+		return cmdVersion(rest)
+	}
 
+	// Refresh the update cache (at most once per day) while the command runs;
+	// the passive notice after a successful command reads the result.
+	upd := update.New(version.Version).Background()
+	code := dispatch(cmd, rest)
+	if code == exitOK {
+		upd.Notice(os.Stderr)
+	}
+	return code
+}
+
+func dispatch(cmd string, rest []string) int {
 	switch cmd {
 	case "init":
 		return cmdInit(rest)
@@ -106,7 +123,30 @@ Usage:
   vault install <browser> [--native-host PATH] [--extension-dir PATH] [--print-only]
   vault doctor
   vault destroy
+  vault version
 `)
+}
+
+// ---- version -------------------------------------------------------------
+
+func cmdVersion(args []string) int {
+	fmt.Println("vault", version.Version)
+	chk := update.New(version.Version)
+	if !chk.Enabled() {
+		return exitOK
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), update.HTTPTimeout)
+	defer cancel()
+	rel, err := chk.CheckNow(ctx)
+	switch {
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "vault: update check failed:", err)
+	case version.IsNewer(rel.Tag, version.Version):
+		fmt.Printf("update available: %s -> %s — %s\n", version.Version, rel.Tag, rel.URL)
+	default:
+		fmt.Println("up to date")
+	}
+	return exitOK
 }
 
 // ---- plumbing ----------------------------------------------------------

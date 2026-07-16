@@ -11,6 +11,7 @@ import (
 	"albear/internal/infrastructure/system"
 	"albear/internal/install"
 	"albear/internal/native"
+	"albear/internal/version"
 )
 
 // productionChromeIDs is the exact allowlist baked into release builds.
@@ -23,6 +24,12 @@ var productionChromeIDs = []string{install.ChromeExtensionID}
 var productionFirefoxIDs []string
 
 func main() {
+	// Version print only: the relay stays purely offline. Browsers pass an
+	// extension origin as os.Args[1], never these flags, so there is no clash.
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "version") {
+		fmt.Println("vault-native", version.Version)
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "vault-native:", err)
 		os.Exit(1)

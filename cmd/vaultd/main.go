@@ -17,9 +17,15 @@ import (
 	"albear/internal/infrastructure/ipc"
 	"albear/internal/infrastructure/sqlite"
 	"albear/internal/infrastructure/system"
+	"albear/internal/version"
 )
 
 func main() {
+	// Version print only: the daemon never talks to the network (PRD 2.1).
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "version") {
+		fmt.Println("vaultd", version.Version)
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "vaultd:", err)
 		os.Exit(1)
