@@ -232,12 +232,21 @@ Fuzz targets (`go test -fuzz=<Name> -fuzztime=30s -run='^$' <pkg>`):
 - Go: stdlib-first. Adding a module dependency needs a real reason.
 - Comments explain *why* a constraint exists, not what the line does.
 - Tests sit beside the code (`*_test.go`, `tests/` in the extension).
-- Releases are unified: one `vX.Y.Z` tag builds Go binaries (plus deb/rpm and
+- Releases are unified: one tag builds Go binaries (plus deb/rpm and
   checksums), the extension zip, and the Linux desktop installer into a single
   GitHub release. GoReleaser creates it as a draft; the other jobs attach to
-  it; a final job un-drafts. Tag an `-rc` first to exercise the pipeline —
-  `prerelease: auto` keeps it out of `/releases/latest`, which drives the CLI
-  update notice.
+  it; a final job un-drafts.
+- **Tags are generated, never hand-written.** Two channels:
+  - push to `main` → `vX.Y.Z-rc.N` pre-release. Invisible to users:
+    `/releases/latest` excludes prereleases, and that is what both the CLI
+    update check and `install.sh` read.
+  - push to `stable` → `vX.Y.Z` stable, marked `--latest`.
+
+  Promote a tested rc by fast-forwarding: `git push origin main:stable`. Keep
+  it a fast-forward — the stable tag must sit on a commit in main's history, or
+  the next rc renumbers from the wrong base. Only `feat:`, `fix:` and `type!:`
+  cut an rc; a `docs:`/`ci:`/`chore:` merge releases nothing. Pushing a `v*`
+  tag by hand still works as an escape hatch.
 
 ## Gotchas
 
