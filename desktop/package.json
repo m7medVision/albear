@@ -220,7 +220,7 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "mohammed-bin-saif",
+      "owner": "m7medVision",
       "repo": "albear"
     }
   },

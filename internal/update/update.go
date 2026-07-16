@@ -16,13 +16,13 @@ import (
 	"path/filepath"
 	"time"
 
-	"albear/internal/infrastructure/system"
-	"albear/internal/version"
+	"github.com/m7medVision/albear/internal/infrastructure/system"
+	"github.com/m7medVision/albear/internal/version"
 )
 
 // defaultRepo is the ONE place the GitHub repository slug lives in the Go
 // code. ALBEAR_UPDATE_REPO overrides it at runtime.
-const defaultRepo = "mohammed-bin-saif/albear"
+const defaultRepo = "m7medVision/albear"
 
 // HTTPTimeout bounds every release lookup, background or synchronous.
 const HTTPTimeout = 2 * time.Second
