@@ -1,11 +1,21 @@
 GO_BIN := vaultd vault vault-native
 
-.PHONY: all build extension test test-go test-ext fuzz vet sqlc vectors clean
+.PHONY: all build devd dev-ext dev-desktop extension test test-go test-ext fuzz vet sqlc vectors clean
 
 all: build extension
 
 build:
 	go build ./cmd/...
+
+# Development: run each component live (run devd first, it owns the socket).
+devd:
+	go run ./cmd/vaultd
+
+dev-ext:
+	cd extension && pnpm dev
+
+dev-desktop:
+	cd desktop && npm start
 
 extension:
 	cd extension && pnpm install && pnpm build
