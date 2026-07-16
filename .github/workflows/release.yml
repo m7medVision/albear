@@ -1,0 +1,198 @@
+# Unified release: pushing one tag vX.Y.Z produces ONE GitHub release that
+# carries the Go binaries, the extension zip, and the desktop installers
+# (plus electron-updater feed files). A draft release is created first so the
+# artifact jobs can attach to it in parallel; it is published (un-drafted)
+# only after every artifact job succeeds.
+#
+# All gh CLI calls target the current repository ($GITHUB_REPOSITORY), so this
+# workflow needs no repo-slug edits. electron-builder's publish target
+# (owner/repo) lives in desktop/package.json under the "build.publish" key.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release for tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists (workflow re-run); reusing it."
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
+              --draft --title "$TAG" --generate-notes
+          fi
+
+  go-binaries:
+    name: Go binaries (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    env:
+      TAG: ${{ github.ref_name }}
+      ASSET: albear_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          # vaultd depends on internal/infrastructure/ipc, which is
+          # //go:build linux — so vaultd is only shipped for linux today.
+          # Add it to the base list when it gains darwin/windows support.
+          cmds="vault vault-native"
+          if [ "$GOOS" = "linux" ]; then cmds="vault vaultd vault-native"; fi
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          mkdir -p dist/pkg
+          for cmd in $cmds; do
+            go build -trimpath \
+              -ldflags "-s -w -X albear/internal/version.Version=${TAG}" \
+              -o "dist/pkg/${cmd}${ext}" "./cmd/${cmd}"
+          done
+          if [ "$GOOS" = "windows" ]; then
+            (cd dist/pkg && zip -q "../${ASSET}.zip" ./*)
+          else
+            # shellcheck disable=SC2086
+            tar -C dist/pkg -czf "dist/${ASSET}.tar.gz" $cmds
+          fi
+
+      - name: Upload to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber \
+            dist/"$ASSET".*
+
+  extension:
+    name: Extension zip
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: extension/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: extension
+        run: pnpm install --frozen-lockfile
+
+      # The checked-in manifest version is a dev placeholder; stamp the tag
+      # version into it at build time so the packaged extension reports the
+      # released version. Chrome requires plain dotted integers, so any
+      # pre-release/build suffix (e.g. v1.2.3-rc1) is stripped for the
+      # manifest only — the zip filename still carries the full tag.
+      - name: Sync manifest version from tag
+        working-directory: extension
+        run: |
+          ver="${TAG#v}"
+          ver="${ver%%-*}"
+          ver="${ver%%+*}"
+          sed -i "s/^  version: '[0-9][^']*',$/  version: '${ver}',/" manifest.config.ts
+          grep -qF "version: '${ver}'," manifest.config.ts
+
+      - name: Build
+        working-directory: extension
+        run: pnpm build
+
+      - name: Zip
+        run: |
+          (cd extension/dist && zip -qr "../../albear-extension-${TAG}.zip" .)
+
+      - name: Upload to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber \
+            "albear-extension-${TAG}.zip"
+
+  desktop:
+    name: Desktop installers (${{ matrix.os }})
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Sync app version from tag
+        run: |
+          (cd release/app && npm version "${TAG#v}" \
+            --no-git-tag-version --allow-same-version)
+
+      - name: Install dependencies
+        run: npm ci
+
+      # electron-builder (--publish always + GH_TOKEN) uploads the installers
+      # and the electron-updater feed files (latest.yml / latest-mac.yml /
+      # latest-linux.yml) to the existing draft release for this tag (it
+      # matches the draft by tag, derived from the synced app version).
+      # Deliberately NOT `npm run package`: that script hardcodes
+      # `--publish never` and npm appends extra args to the wrong command in
+      # the chain. No code signing in CI: only GITHUB_TOKEN is available, so
+      # identity auto-discovery is disabled.
+      - name: Package and publish installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          npm exec ts-node -- ./.erb/scripts/clean.js dist
+          npm run build
+          npx electron-builder build --publish always
+
+  publish:
+    name: Publish release
+    needs: [go-binaries, extension, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Un-draft the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false --latest

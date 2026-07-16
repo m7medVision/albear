@@ -1,0 +1,48 @@
+# Git hooks managed by lefthook (https://lefthook.dev).
+# Install after cloning: lefthook install
+
+commit-msg:
+  jobs:
+    - name: conventional-commit
+      run: tools/hooks/commit-msg.sh {1}
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: gofmt
+      glob: "*.go"
+      run: |
+        unformatted="$(gofmt -l {staged_files})"
+        if [ -n "$unformatted" ]; then
+          echo "gofmt: the following staged files are not formatted:" >&2
+          echo "$unformatted" >&2
+          echo "Run: gofmt -w <files>" >&2
+          exit 1
+        fi
+
+    - name: go-vet
+      glob: "*.go"
+      run: go vet ./...
+
+    - name: tsc-extension
+      root: extension/
+      glob: "*.{ts,tsx}"
+      run: |
+        # Skip silently when the extension deps are not installed.
+        if [ -d node_modules ]; then
+          npx tsc --noEmit
+        fi
+
+    - name: tsc-desktop
+      root: desktop/
+      glob: "*.{ts,tsx}"
+      run: |
+        # Skip silently when the desktop deps are not installed.
+        if [ -d node_modules ]; then
+          npx tsc --noEmit
+        fi
+
+pre-push:
+  jobs:
+    - name: go-test
+      run: go test ./... -timeout 300s
