@@ -1,3 +1,5 @@
+> Your passwords, API keys, notes, and passkeys are safe as long as the Gopher doesn't dig the well, and you'll never find out, because the CIA programmed him to. (joke)
+
 <p align="center">
   <img src="assets/albear.png" width="160" alt="albear">
 </p>
