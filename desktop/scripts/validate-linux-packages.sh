@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=package-version.sh
+source "$script_dir/package-version.sh"
+
 build_dir=${1:?usage: validate-linux-packages.sh BUILD_DIR TAG}
 tag=${2:?usage: validate-linux-packages.sh BUILD_DIR TAG}
 version=${tag#v}
@@ -23,7 +27,8 @@ for artifact in "$appimage" "$deb" "$rpm_pkg"; do
 done
 
 assert_version() {
-  local actual=$1 expected=${version//-/~}
+  local actual=$1 expected
+  expected=$(package_version_for_release "$version")
   if [[ $actual != "$expected" ]]; then
     echo "package version $actual does not match release $version (expected $expected)" >&2
     exit 1
