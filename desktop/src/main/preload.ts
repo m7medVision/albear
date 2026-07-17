@@ -8,6 +8,7 @@ import type {
   Canceled,
   ClientView,
   DesktopStatus,
+  DaemonServiceStatus,
   EventView,
   GenerateOptions,
   PendingPairingView,
@@ -53,6 +54,10 @@ export type ElectronHandler = typeof electronHandler;
 const albearHandler = {
   status: (): Promise<AlbearResult<DesktopStatus>> =>
     ipcRenderer.invoke('albear:status'),
+  daemonServiceStatus: (): Promise<AlbearResult<DaemonServiceStatus>> =>
+    ipcRenderer.invoke('albear:daemonServiceStatus'),
+  daemonServiceSetup: (): Promise<AlbearResult<DaemonServiceStatus>> =>
+    ipcRenderer.invoke('albear:daemonServiceSetup'),
   unlock: (password: string): Promise<AlbearResult<unknown>> =>
     ipcRenderer.invoke('albear:unlock', password),
   lock: (): Promise<AlbearResult<unknown>> => ipcRenderer.invoke('albear:lock'),

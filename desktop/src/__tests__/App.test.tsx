@@ -1,13 +1,15 @@
 import '@testing-library/jest-dom';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import App from '../renderer/App';
-import { albearMock, ok, UNLOCKED } from './albearMock';
+import { albearMock, fail, ok, UNLOCKED } from './albearMock';
 
 describe('App', () => {
-  it('shows the daemon-unavailable state with a retry hint', async () => {
+  it('shows an actionable fallback when automatic service setup is unavailable', async () => {
     window.albear = albearMock();
     render(<App />);
-    expect(await screen.findByText(/is vaultd running\?/)).toBeInTheDocument();
+    expect(
+      await screen.findByText('Automatic service setup is unavailable'),
+    ).toBeInTheDocument();
     expect(screen.getByText('Retry')).toBeInTheDocument();
   });
 
@@ -46,6 +48,129 @@ describe('App', () => {
     render(<App />);
     expect(await screen.findByText('GitHub')).toBeInTheDocument();
     expect(screen.getByText('Reveal')).toBeInTheDocument();
+  });
+});
+
+describe('daemon service onboarding', () => {
+  it('requires explicit consent before enabling the installed service', async () => {
+    const daemonServiceSetup = jest
+      .fn()
+      .mockResolvedValue(ok({ state: 'running', enabled: true }));
+    window.albear = albearMock({
+      daemonServiceStatus: jest
+        .fn()
+        .mockResolvedValue(ok({ state: 'stopped', enabled: false })),
+      daemonServiceSetup,
+    });
+    render(<App />);
+
+    expect(await screen.findByText('Start Albear')).toBeInTheDocument();
+    expect(screen.getByText(/never listens on a network/)).toBeInTheDocument();
+    expect(daemonServiceSetup).not.toHaveBeenCalled();
+  });
+
+  it('starts the service and continues to vault creation', async () => {
+    const status = jest
+      .fn()
+      .mockResolvedValueOnce(ok({ available: false }))
+      .mockResolvedValue(ok({ available: true, initialized: false }));
+    const daemonServiceSetup = jest
+      .fn()
+      .mockResolvedValue(ok({ state: 'running', enabled: true }));
+    window.albear = albearMock({
+      status,
+      daemonServiceStatus: jest
+        .fn()
+        .mockResolvedValue(ok({ state: 'stopped', enabled: false })),
+      daemonServiceSetup,
+    });
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Enable and start' }),
+    );
+    expect(await screen.findByText('Create your vault')).toBeInTheDocument();
+    expect(daemonServiceSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues to the locked phase without unlocking automatically', async () => {
+    const unlock = jest.fn().mockResolvedValue(ok({}));
+    window.albear = albearMock({
+      status: jest
+        .fn()
+        .mockResolvedValueOnce(ok({ available: false }))
+        .mockResolvedValue(
+          ok({ available: true, initialized: true, unlocked: false }),
+        ),
+      daemonServiceStatus: jest
+        .fn()
+        .mockResolvedValue(ok({ state: 'stopped', enabled: false })),
+      daemonServiceSetup: jest
+        .fn()
+        .mockResolvedValue(ok({ state: 'running', enabled: true })),
+      unlock,
+    });
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Enable and start' }),
+    );
+    expect(
+      await screen.findByPlaceholderText('Master password'),
+    ).toBeInTheDocument();
+    expect(unlock).not.toHaveBeenCalled();
+  });
+
+  it('keeps setup failures in a retryable, non-secret error state', async () => {
+    window.albear = albearMock({
+      daemonServiceStatus: jest
+        .fn()
+        .mockResolvedValue(ok({ state: 'stopped', enabled: false })),
+      daemonServiceSetup: jest
+        .fn()
+        .mockResolvedValue(
+          fail(
+            'SERVICE_START_FAILED',
+            'could not start the Albear background service',
+          ),
+        ),
+    });
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Enable and start' }),
+    );
+    expect(await screen.findByText('Could not start Albear')).toBeInTheDocument();
+    expect(
+      screen.getByText('could not start the Albear background service'),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['missing', 'Albear core is not installed'],
+    ['failed', 'The Albear service did not start'],
+    ['unsupported', 'Automatic service setup is unavailable'],
+  ] as const)('explains the %s service state', async (state, message) => {
+    window.albear = albearMock({
+      daemonServiceStatus: jest.fn().mockResolvedValue(ok({ state })),
+    });
+    render(<App />);
+    expect(await screen.findByText(message)).toBeInTheDocument();
+  });
+
+  it('does not inspect or reconfigure the service when vaultd is reachable', async () => {
+    const daemonServiceStatus = jest.fn();
+    const daemonServiceSetup = jest.fn();
+    window.albear = albearMock({
+      status: jest.fn().mockResolvedValue(UNLOCKED),
+      daemonServiceStatus,
+      daemonServiceSetup,
+    });
+    render(<App />);
+
+    await screen.findByText('unlocked');
+    expect(daemonServiceStatus).not.toHaveBeenCalled();
+    expect(daemonServiceSetup).not.toHaveBeenCalled();
   });
 });
 

@@ -20,6 +20,12 @@ export function albearMock(
 ): AlbearHandler {
   return {
     status: jest.fn().mockResolvedValue(ok({ available: false })),
+    daemonServiceStatus: jest
+      .fn()
+      .mockResolvedValue(ok({ state: 'unsupported' })),
+    daemonServiceSetup: jest
+      .fn()
+      .mockResolvedValue(ok({ state: 'running', enabled: true })),
     unlock: jest.fn().mockResolvedValue(empty),
     lock: jest.fn().mockResolvedValue(empty),
     panic: jest.fn().mockResolvedValue(empty),

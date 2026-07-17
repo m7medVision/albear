@@ -42,8 +42,11 @@ The relay only ever sees ciphertext — it cannot read or forge traffic.
 
 ## Install
 
-Linux only, on amd64 and arm64. `vaultd` authorizes clients by checking the
+Linux only. The core tools support amd64 and arm64; the desktop packages and
+AppImage currently support amd64. `vaultd` authorizes clients by checking the
 socket peer's credentials, so there is no macOS or Windows build.
+
+### Core tools
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/m7medVision/albear/main/install.sh | sh
@@ -53,12 +56,43 @@ That installs `vaultd`, `vault` and `vault-native` into `~/.local/bin` and adds 
 systemd user unit. Set `ALBEAR_INSTALL_DIR` to install elsewhere,
 `ALBEAR_VERSION` to pin a tag, or `ALBEAR_NO_SERVICE=1` to skip the unit.
 
-Prefer a package? Grab the `.deb` or `.rpm` from the
-[latest release](https://github.com/m7medVision/albear/releases/latest):
+Prefer a system package? The `albear` `.deb` and `.rpm` contain only the daemon,
+CLI, native relay and user service — no Electron runtime. Grab the matching file
+from the [latest release](https://github.com/m7medVision/albear/releases/latest):
 
 ```sh
-sudo dpkg -i albear_*_linux_amd64.deb    # or: sudo rpm -i albear_*_linux_amd64.rpm
+sudo apt install ./albear_1.2.3_linux_amd64.deb
+# or
+sudo dnf install ./albear_1.2.3_linux_amd64.rpm
 ```
+
+### Desktop application
+
+The separate `albear-desktop` package contains the GUI and depends on the core
+`albear` package. GitHub Releases is not an apt or dnf repository, so download
+both matching files and install them in one command:
+
+```sh
+# Ubuntu / Debian
+sudo apt install \
+  ./albear_1.2.3_linux_amd64.deb \
+  ./albear-desktop_1.2.3_amd64.deb
+
+# Fedora / RPM-based distributions
+sudo dnf install \
+  ./albear_1.2.3_linux_amd64.rpm \
+  ./albear-desktop_1.2.3_x86_64.rpm
+```
+
+Launch **Albear** from the application menu. On first launch it offers to enable
+and start the local systemd user service; the vault stays locked until you enter
+your master password. The AppImage remains available in the same release, but it
+also requires the core tools and daemon.
+
+AppImage installs keep the built-in desktop updater. The `.deb` and `.rpm` are
+owned by the system package manager and never replace themselves with an
+AppImage; until an apt/dnf repository is added, upgrade them by downloading the
+new matching packages from a later release.
 
 Or install the binaries with Go:
 
@@ -82,7 +116,8 @@ can verify with:
 gh attestation verify albear_v1.2.3_linux_amd64.tar.gz -R m7medVision/albear
 ```
 
-The desktop app (AppImage) and the extension zip are attached to the same release.
+The desktop AppImage, desktop `.deb`/`.rpm`, core packages, archives, and
+extension zip are attached to the same unified release.
 
 ## Build
 
