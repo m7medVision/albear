@@ -64,6 +64,22 @@ var pairingOps = map[string]bool{
 	"vault.status":   true,
 }
 
+// idleExemptOps do not extend the auto-lock deadline. Status is polled on a
+// timer by the desktop app and the popup; letting it count as activity would
+// keep an unattended vault unlocked forever.
+var idleExemptOps = map[string]bool{"vault.status": true}
+
+// lockedStateOps may still mint a session on an already-authenticated
+// connection while the vault is locked. Every other operation is denied there
+// (sessions die on lock), but locking wipes all sessions and unlock itself is
+// an authorized operation, so without this exemption a client holding a live
+// connection could never unlock again without re-handshaking. Neither op
+// exposes a secret and unlock still requires the master password.
+var lockedStateOps = map[string]bool{
+	"vault.status": true,
+	"vault.unlock": true,
+}
+
 // Handle dispatches one decrypted request envelope and returns the response
 // envelope. It never returns internal error text to the client.
 func (s *Server) Handle(ctx context.Context, st *connState, raw []byte) *protocol.Response {
@@ -85,7 +101,7 @@ func (s *Server) Handle(ctx context.Context, st *connState, raw []byte) *protoco
 		if !ok {
 			return protocol.ErrResponse(req.RequestID, shared.ErrValidation)
 		}
-		if err := s.authorize(st, cap); err != nil {
+		if err := s.authorize(ctx, st, req.Operation, cap); err != nil {
 			s.recorder.Record(ctx, secdomain.SeverityWarning, secdomain.EventUnauthorizedRequest, "")
 			return protocol.ErrResponse(req.RequestID, err)
 		}
@@ -103,21 +119,32 @@ func (s *Server) Handle(ctx context.Context, st *connState, raw []byte) *protoco
 }
 
 // authorize validates the connection's session against the current epoch,
-// reissuing over the already-authenticated channel when the epoch moved
-// (the cryptographic identity did not change; revoked clients are dropped).
-func (s *Server) authorize(st *connState, cap accessdomain.Capability) error {
+// reissuing over the already-authenticated channel when the epoch moved (the
+// cryptographic identity did not change; revoked clients are dropped).
+//
+// Sessions die on lock: while the vault is locked no replacement session is
+// minted except for lockedStateOps, so a connection that was live across a
+// lock cannot carry its privileges into the next unlocked period.
+func (s *Server) authorize(ctx context.Context, st *connState, op string, cap accessdomain.Capability) error {
 	epoch := s.vault.Epoch()
 	if st.session == nil {
 		return shared.ErrAuthorizationDeny
 	}
-	if _, err := s.sessions.Validate(st.session.ID, epoch); err != nil {
+	if _, err := s.sessions.Validate(st.session.ID, epoch, !idleExemptOps[op]); err != nil {
+		if !s.vault.IsUnlocked() && !lockedStateOps[op] {
+			return shared.ErrAuthorizationDeny
+		}
+		caps := st.session.Capabilities
 		if !st.clientID.IsZero() {
-			client, lookupErr := s.access.Lookup(context.Background(), st.clientID)
+			client, lookupErr := s.access.Lookup(ctx, st.clientID)
 			if lookupErr != nil || !client.IsApproved() {
 				return shared.ErrAuthorizationDeny
 			}
+			// Re-read from the row rather than trusting the handshake-era
+			// copy, so a capability reduction applies without a reconnect.
+			caps = client.Capabilities
 		}
-		fresh, issueErr := s.sessions.Issue(st.clientID, st.session.Capabilities, epoch)
+		fresh, issueErr := s.sessions.Issue(st.clientID, caps, epoch)
 		if issueErr != nil {
 			return shared.ErrAuthorizationDeny
 		}

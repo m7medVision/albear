@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	flynnnoise "github.com/flynn/noise"
 
@@ -80,12 +81,54 @@ func New(log *slog.Logger, store *sqlite.Store, dbPath string, staticKey flynnno
 // Vault exposes the vault service (used by vaultd main for shutdown locking).
 func (s *Server) Vault() *vaultapp.Service { return s.vault }
 
+// idleLockInterval is how often the idle-lock loop wakes. It bounds how far
+// past LockPolicy.AutoLockAfter the lock can land, so it stays well under the
+// 5-minute policy window.
+const idleLockInterval = 15 * time.Second
+
+// enforceIdleLock locks the vault when the whole idle window has elapsed with
+// no capability-using request. It reports whether it locked. Locking wipes the
+// keyring and fires the lock hooks; it never destroys anything (invariant 7).
+func (s *Server) enforceIdleLock(ctx context.Context, now time.Time) bool {
+	if !s.vault.IsUnlocked() {
+		return false
+	}
+	window := s.vault.LockPolicy().AutoLockAfter
+	if window <= 0 {
+		return false
+	}
+	// No live session while unlocked means nobody can reach the vault without
+	// re-handshaking anyway, so treat it as idle and fail closed.
+	if last, ok := s.sessions.LastActivity(); ok && now.Sub(last) < window {
+		return false
+	}
+	s.vault.Lock()
+	s.recorder.Record(ctx, secdomain.SeverityInfo, secdomain.EventVaultLocked, "")
+	s.log.Info("vault auto-locked after idle period", "category", "vault")
+	return true
+}
+
+// runIdleLock enforces the idle policy until ctx is done.
+func (s *Server) runIdleLock(ctx context.Context) {
+	t := time.NewTicker(idleLockInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			s.enforceIdleLock(ctx, now)
+		}
+	}
+}
+
 // Serve accepts connections until ctx is done.
 func (s *Server) Serve(ctx context.Context, ln *net.UnixListener) error {
 	go func() {
 		<-ctx.Done()
 		ln.Close()
 	}()
+	go s.runIdleLock(ctx)
 	for {
 		conn, err := ln.AcceptUnix()
 		if err != nil {

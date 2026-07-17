@@ -110,6 +110,22 @@ func (s *Service) Epoch() uint64 {
 	return s.vault.Epoch
 }
 
+// IsUnlocked reports the lock state without touching key material or the
+// database, so authorization and the idle-lock loop can consult it cheaply.
+func (s *Service) IsUnlocked() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vault.IsUnlocked()
+}
+
+// LockPolicy returns the loaded vault's lock policy. It is the zero policy
+// until a vault is loaded, so callers must gate on IsUnlocked first.
+func (s *Service) LockPolicy() domain.LockPolicy {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vault.LockPolicy
+}
+
 // Init creates the vault: random root key, Argon2id envelope, verified canary
 // (PRD 15.1). It fails if a vault already exists.
 func (s *Service) Init(ctx context.Context, password []byte, params crypto.KDFParams) error {

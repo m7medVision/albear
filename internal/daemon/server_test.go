@@ -9,6 +9,7 @@ import (
 	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/m7medVision/albear/internal/adapters/protocol"
 	"github.com/m7medVision/albear/internal/client"
@@ -16,6 +17,7 @@ import (
 	"github.com/m7medVision/albear/internal/infrastructure/ipc"
 	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
 	transport "github.com/m7medVision/albear/internal/infrastructure/transport/noise"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 var fastParams = crypto.KDFParams{MemoryKiB: crypto.MinMemoryKiB, Iterations: 3, Parallelism: 4}
@@ -180,13 +182,147 @@ func TestFullLifecycleOverSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Lock: record operations now fail with VAULT_LOCKED.
+	// Lock: the connection's session dies with the vault, so record
+	// operations are denied rather than re-authorized against a locked vault.
 	if err := c.Call("vault.lock", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	err = c.Call("records.list", nil, nil)
-	if apiCode(t, err) != protocol.CodeVaultLocked {
+	if apiCode(t, err) != protocol.CodeDenied {
 		t.Fatal(err)
+	}
+}
+
+// TestIdleAutoLock drives the idle check with a synthetic clock rather than
+// sleeping: the sessions carry real timestamps, and enforceIdleLock is handed
+// a "now" past the policy window.
+func TestIdleAutoLock(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+	c.Call("records.create", map[string]any{"name": "n", "type": "note", "notes": "body"}, nil)
+
+	ctx := context.Background()
+	window := d.server.vault.LockPolicy().AutoLockAfter
+	last, ok := d.server.sessions.LastActivity()
+	if !ok {
+		t.Fatal("no session activity after unlock")
+	}
+
+	// Inside the window the vault stays unlocked.
+	if d.server.enforceIdleLock(ctx, last.Add(window-time.Second)) {
+		t.Fatal("locked before the idle window elapsed")
+	}
+	if !d.server.vault.IsUnlocked() {
+		t.Fatal("vault locked early")
+	}
+
+	// Past the window it locks, wiping keys and every session.
+	if !d.server.enforceIdleLock(ctx, last.Add(window+time.Second)) {
+		t.Fatal("idle vault did not auto-lock")
+	}
+	if d.server.vault.IsUnlocked() {
+		t.Fatal("vault still unlocked after idle lock")
+	}
+	if _, err := d.server.vault.Keys(); !errors.Is(err, shared.ErrVaultLocked) {
+		t.Fatalf("keyring survived idle lock: %v", err)
+	}
+	if n := d.server.sessions.Count(); n != 0 {
+		t.Fatalf("%d sessions survived idle lock", n)
+	}
+
+	// Invariant 7: locking never destroys. The vault is still there.
+	c2 := cliConn(t, d)
+	var status struct {
+		Initialized bool `json:"initialized"`
+		Unlocked    bool `json:"unlocked"`
+	}
+	if err := c2.Call("vault.status", nil, &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Initialized || status.Unlocked {
+		t.Fatalf("idle lock destroyed or failed to lock the vault: %+v", status)
+	}
+	if err := c2.Call("vault.unlock", map[string]string{"password": "master password"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Records []map[string]any `json:"records"`
+	}
+	if err := c2.Call("records.list", nil, &list); err != nil || len(list.Records) != 1 {
+		t.Fatalf("records lost to idle lock: %d %v", len(list.Records), err)
+	}
+}
+
+// TestStatusPollingDoesNotDeferIdleLock covers the polling exemption: the
+// desktop app and popup poll vault.status on a timer, which must not keep an
+// unattended vault unlocked.
+func TestStatusPollingDoesNotDeferIdleLock(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+
+	before, ok := d.server.sessions.LastActivity()
+	if !ok {
+		t.Fatal("no session activity after unlock")
+	}
+	for i := 0; i < 3; i++ {
+		if err := c.Call("vault.status", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, _ := d.server.sessions.LastActivity()
+	if !after.Equal(before) {
+		t.Fatalf("status polling reset the idle timer: %v -> %v", before, after)
+	}
+
+	// A capability-using request does extend it.
+	if err := c.Call("records.list", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if moved, _ := d.server.sessions.LastActivity(); !moved.After(before) {
+		t.Fatal("real activity did not extend the idle deadline")
+	}
+}
+
+// TestLockedVaultDeniesLiveConnection is the other half of "sessions die on
+// lock": no replacement session is minted while locked, but the connection can
+// still see status and unlock, or it could never recover without reconnecting.
+func TestLockedVaultDeniesLiveConnection(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+
+	if err := c.Call("vault.lock", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := d.server.sessions.Count(); n != 0 {
+		t.Fatalf("%d sessions survived lock", n)
+	}
+
+	// Capability-bearing operations are denied with no re-mint.
+	for _, op := range []string{"records.list", "records.reveal", "backup.create", "clients.list"} {
+		err := c.Call(op, map[string]string{"ref": "x", "path": "/x"}, nil)
+		if apiCode(t, err) != protocol.CodeDenied {
+			t.Fatalf("%s: %v", op, err)
+		}
+		if n := d.server.sessions.Count(); n != 0 {
+			t.Fatalf("%s minted a session while locked", op)
+		}
+	}
+
+	// Status and unlock stay reachable on the authenticated connection.
+	var status struct {
+		Unlocked bool `json:"unlocked"`
+	}
+	if err := c.Call("vault.status", nil, &status); err != nil || status.Unlocked {
+		t.Fatalf("status while locked: %+v %v", status, err)
+	}
+	if err := c.Call("vault.unlock", map[string]string{"password": "master password"}, nil); err != nil {
+		t.Fatalf("live connection could not unlock: %v", err)
+	}
+	if err := c.Call("records.list", nil, nil); err != nil {
+		t.Fatalf("session not restored after unlock: %v", err)
 	}
 }
 

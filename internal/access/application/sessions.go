@@ -47,8 +47,10 @@ func (m *SessionManager) Issue(clientID shared.ID, caps domain.CapabilitySet, ep
 	return s, nil
 }
 
-// Validate returns the session if it is alive for the given epoch.
-func (m *SessionManager) Validate(id shared.ID, epoch uint64) (*domain.Session, error) {
+// Validate returns the session if it is alive for the given epoch. activity
+// reports whether this request should extend the idle-lock deadline; polling
+// operations pass false so an unattended vault still auto-locks.
+func (m *SessionManager) Validate(id shared.ID, epoch uint64, activity bool) (*domain.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
@@ -60,8 +62,31 @@ func (m *SessionManager) Validate(id shared.ID, epoch uint64) (*domain.Session, 
 		delete(m.sessions, id)
 		return nil, shared.ErrAuthorizationDeny
 	}
-	s.LastActivity = now
+	if activity {
+		s.LastActivity = now
+	}
 	return s, nil
+}
+
+// LastActivity reports the most recent activity across live sessions, and
+// whether any live session exists. It drives the idle auto-lock deadline;
+// epoch is deliberately not considered, because the session that unlocked the
+// vault belongs to the previous epoch yet still marks real user activity.
+func (m *SessionManager) LastActivity() (time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var latest time.Time
+	found := false
+	now := m.clock.Now()
+	for _, s := range m.sessions {
+		if now.After(s.ExpiresAt) {
+			continue
+		}
+		if !found || s.LastActivity.After(latest) {
+			latest, found = s.LastActivity, true
+		}
+	}
+	return latest, found
 }
 
 // Drop removes one session.
