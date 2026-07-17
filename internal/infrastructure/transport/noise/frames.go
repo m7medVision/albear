@@ -10,8 +10,17 @@ import (
 )
 
 // MaxFrameSize keeps every frame under Chrome's 1 MB native-messaging limit
-// with room for relay overhead.
-const MaxFrameSize = 768 * 1024
+// (native.MaxNativeMessage) once the relay has base64-encoded it and wrapped
+// it in {"frame":"..."}.
+//
+// The budget: base64 costs 4 bytes per 3, so the frame ceiling must satisfy
+// ceil(n/3)*4 + 12 <= 1048576, giving n <= 786420. The previous 768 KiB
+// (786432) encoded to exactly 1048576 and then overflowed on the wrapper, so
+// a maximum-size frame could not be relayed at all. 750 KiB encodes to
+// 1024000 and leaves ~24 KiB of headroom.
+//
+// Keep this in step with MAX_FRAME_SIZE in desktop/src/main/frames.ts.
+const MaxFrameSize = 750 * 1024
 
 var (
 	ErrFrameTooLarge = errors.New("noise: frame exceeds maximum size")

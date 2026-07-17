@@ -13,7 +13,7 @@ import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
-import { resolveHtmlPath } from './util';
+import { isSafeExternalUrl, resolveHtmlPath } from './util';
 import { VaultClient } from './vaultClient';
 import { registerVaultIpc } from './ipc';
 
@@ -105,6 +105,13 @@ const createWindow = async () => {
       preload: app.isPackaged
         ? path.join(__dirname, 'preload.js')
         : path.join(__dirname, '../../.erb/dll/preload.js'),
+      // Pinned rather than left to Electron's defaults: these are what keep a
+      // compromised renderer away from Node and from the socket. The preload
+      // only touches contextBridge/ipcRenderer, so the sandbox costs nothing.
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
     },
   });
 
@@ -128,10 +135,23 @@ const createWindow = async () => {
   const menuBuilder = new MenuBuilder(mainWindow);
   menuBuilder.buildMenu();
 
-  // Open urls in the user's browser
+  // Open urls in the user's browser. The scheme is checked first: shell
+  // .openExternal hands the string to the OS handler, so `file://` would open
+  // a local file and a scheme like `smb://` can reach the network stack.
+  // Only ordinary web links leave here.
   mainWindow.webContents.setWindowOpenHandler((edata) => {
-    shell.openExternal(edata.url);
+    if (isSafeExternalUrl(edata.url)) shell.openExternal(edata.url);
     return { action: 'deny' };
+  });
+
+  // A renderer that can be navigated is a renderer that can be replaced: an
+  // attacker-controlled page would inherit the window and its preload bridge.
+  // The app is a single local document, so any top-level navigation away from
+  // it is a bug or an attack. External links are routed to the browser.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url === mainWindow?.webContents.getURL()) return;
+    event.preventDefault();
+    if (isSafeExternalUrl(url)) shell.openExternal(url);
   });
 
   // eslint-disable-next-line no-new
