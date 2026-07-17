@@ -194,6 +194,7 @@ export function ClientsSection(): React.ReactElement {
                       className="text-destructive hover:text-destructive hover:bg-destructive/10"
                       disabled={busy === c.id}
                       onClick={() => setConfirmRevoke(c.id)}
+                      aria-label={`Revoke ${c.label}`}
                     >
                       <ShieldOff />
                       Revoke
