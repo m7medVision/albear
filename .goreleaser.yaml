@@ -57,7 +57,7 @@ nfpms:
     package_name: albear
     ids: [vaultd, vault, vault-native]
     formats: [deb, rpm]
-    maintainer: Mohammed <1mohammed.bin.saif@gmail.com>
+    maintainer: Mohammed <m7medvision@duck.com>
     description: Local-only encrypted secrets manager.
     license: MIT
     homepage: https://github.com/m7medVision/albear
@@ -78,7 +78,7 @@ nfpms:
 #     ids: [default]
 #     homepage: https://github.com/m7medVision/albear
 #     description: Local-only encrypted secrets manager.
-#     maintainers: ['Mohammed <1mohammed.bin.saif@gmail.com>']
+#     maintainers: ['Mohammed <m7medvision@duck.com>']
 #     license: MIT
 #     private_key: '{{ .Env.AUR_KEY }}'
 #     git_url: 'ssh://aur@aur.archlinux.org/albear-bin.git'

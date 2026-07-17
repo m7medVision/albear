@@ -213,15 +213,41 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # electron-builder's RPM target invokes rpmbuild, and the same package
+      # supplies rpm(8) for inspecting the result before publication.
+      - name: Install Linux package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
       # NOT `npm run package`: that script hardcodes `--publish never` and npm
-      # appends extra args to the wrong command in the chain.
-      - name: Package and publish installer
+      # appends extra args to the wrong command in the chain. Desktop remains
+      # amd64-only until an arm64 Electron build is validated; the core package
+      # continues to ship both architectures independently.
+      - name: Package and upload desktop artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm exec ts-node -- ./.erb/scripts/clean.js dist
           npm run build
-          npx electron-builder build --linux --publish always
+          npx electron-builder build --linux --x64 --publish always
+
+      - name: Validate desktop package metadata and contents
+        run: ./scripts/validate-linux-packages.sh release/build "$TAG"
+
+      # GitHub Releases is not an apt/dnf repository. Download the matching
+      # core assets from the draft and prove both local files install together.
+      - name: Download matching core packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p release/core
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" \
+            --pattern 'albear_*.deb' --pattern 'albear_*.rpm' \
+            --dir release/core
+
+      - name: Smoke-test Ubuntu and Fedora installation
+        run: ./scripts/smoke-linux-packages.sh release/build release/core "$TAG"
 
   publish:
     name: Publish release

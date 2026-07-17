@@ -1,9 +1,12 @@
 {
   "name": "albear-desktop",
+  "desktopName": "dev.albear.desktop",
   "description": "Albear desktop app — a local-only encrypted secrets manager",
   "license": "MIT",
+  "homepage": "https://github.com/m7medVision/albear",
   "author": {
-    "name": "Mohammed"
+    "name": "Mohammed",
+    "email": "m7medvision@duck.com"
   },
   "main": "./.erb/dll/main.bundle.dev.js",
   "scripts": {
@@ -171,9 +174,69 @@
     ],
     "linux": {
       "target": [
-        "AppImage"
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
-      "category": "Development"
+      "artifactName": "albear-desktop_${version}_${arch}.${ext}",
+      "executableName": "albear-desktop",
+      "syncDesktopName": true,
+      "icon": "assets/icons",
+      "category": "Utility",
+      "synopsis": "Local-only encrypted secrets manager desktop app",
+      "description": "Desktop client for the Albear local-only encrypted secrets manager.",
+      "maintainer": "Mohammed <m7medvision@duck.com>",
+      "vendor": "Albear"
+    },
+    "deb": {
+      "packageName": "albear-desktop",
+      "packageCategory": "utils",
+      "priority": "optional",
+      "depends": [
+        "albear",
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0"
+      ],
+      "recommends": [
+        "libappindicator3-1"
+      ]
+    },
+    "rpm": {
+      "packageName": "albear-desktop",
+      "packageCategory": "Applications/Utility",
+      "depends": [
+        "albear",
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "(libXtst or libXtst6)",
+        "xdg-utils",
+        "at-spi2-core",
+        "(libuuid or libuuid1)"
+      ]
     },
     "directories": {
       "app": "release/app",

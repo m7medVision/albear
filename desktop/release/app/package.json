@@ -1,10 +1,13 @@
 {
   "name": "albear-desktop",
+  "desktopName": "dev.albear.desktop",
   "version": "0.1.0",
   "description": "Albear desktop app — a local-only encrypted secrets manager",
   "license": "MIT",
+  "homepage": "https://github.com/m7medVision/albear",
   "author": {
-    "name": "Mohammed"
+    "name": "Mohammed",
+    "email": "m7medvision@duck.com"
   },
   "main": "./dist/main/main.js",
   "scripts": {
