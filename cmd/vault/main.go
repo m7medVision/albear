@@ -181,7 +181,7 @@ func exitCodeFor(err error) int {
 			return exitIntegrity
 		case protocol.CodeConflict:
 			return exitConflict
-		case protocol.CodeInvalid:
+		case protocol.CodeInvalid, protocol.CodeWeakPassword:
 			return exitUsage
 		}
 		return exitInternal
@@ -339,6 +339,7 @@ type recordFlags struct {
 	service   *string
 	env       *string
 	urls      *string
+	subs      *string
 	tags      *string
 	notes     *string
 	apiKey    *string
@@ -350,12 +351,15 @@ type recordFlags struct {
 func newRecordFlags(name string) *recordFlags {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	return &recordFlags{
-		fs:        fs,
-		name:      fs.String("name", "", "record name"),
-		username:  fs.String("username", "", "username"),
-		service:   fs.String("service", "", "service (api-key)"),
-		env:       fs.String("environment", "", "environment (api-key)"),
-		urls:      fs.String("url", "", "comma-separated URLs"),
+		fs:       fs,
+		name:     fs.String("name", "", "record name"),
+		username: fs.String("username", "", "username"),
+		service:  fs.String("service", "", "service (api-key)"),
+		env:      fs.String("environment", "", "environment (api-key)"),
+		urls:     fs.String("url", "", "comma-separated URLs"),
+		subs: fs.String("allow-subdomains", "",
+			"comma-separated URLs from --url that should also match their subdomains "+
+				"(default: every URL matches its exact origin only)"),
 		tags:      fs.String("tags", "", "comma-separated tags"),
 		notes:     fs.String("notes", "", "notes body"),
 		apiKey:    fs.String("api-key", "", "API key value"),
@@ -379,6 +383,34 @@ func splitList(s string) []string {
 	return out
 }
 
+// urlEntries pairs each URL with its matching policy. Every URL matches its
+// exact origin; those named in --allow-subdomains also match hosts under them.
+//
+// A name in --allow-subdomains that is not in --url is an error rather than a
+// no-op: the user asked for a policy on some URL, and silently not applying it
+// would leave them believing a site is covered when it is not.
+func urlEntries(urls, subs []string) ([]map[string]any, error) {
+	allow := make(map[string]bool, len(subs))
+	for _, s := range subs {
+		allow[s] = false
+	}
+	entries := make([]map[string]any, 0, len(urls))
+	for _, u := range urls {
+		e := map[string]any{"url": u}
+		if _, ok := allow[u]; ok {
+			e["sub"] = true
+			allow[u] = true
+		}
+		entries = append(entries, e)
+	}
+	for s, used := range allow {
+		if !used {
+			return nil, fmt.Errorf("--allow-subdomains %q is not one of the --url values", s)
+		}
+	}
+	return entries, nil
+}
+
 func (rf *recordFlags) payload(recordType string) (map[string]any, error) {
 	p := map[string]any{"type": recordType, "name": *rf.name}
 	if *rf.username != "" {
@@ -391,7 +423,11 @@ func (rf *recordFlags) payload(recordType string) (map[string]any, error) {
 		p["environment"] = *rf.env
 	}
 	if urls := splitList(*rf.urls); urls != nil {
-		p["urls"] = urls
+		entries, err := urlEntries(urls, splitList(*rf.subs))
+		if err != nil {
+			return nil, err
+		}
+		p["urlEntries"] = entries
 	}
 	if tags := splitList(*rf.tags); tags != nil {
 		p["tags"] = tags
@@ -481,7 +517,15 @@ type recordView struct {
 	Username string   `json:"username"`
 	Service  string   `json:"service"`
 	URLs     []string `json:"urls"`
-	Tags     []string `json:"tags"`
+	// URLEntries carries each URL's matching policy. Edit reads it so saving a
+	// record does not quietly reset a subdomain opt-in the user set earlier.
+	URLEntries []urlEntryView `json:"urlEntries"`
+	Tags       []string       `json:"tags"`
+}
+
+type urlEntryView struct {
+	URL string `json:"url"`
+	Sub bool   `json:"sub"`
 }
 
 func printRecords(records []recordView) {
@@ -569,7 +613,21 @@ func cmdShow(args []string) int {
 			fmt.Printf("%-12s %v\n", k+":", v)
 		}
 	}
-	if urls, ok := meta["urls"].([]any); ok {
+	// Show the matching policy next to each URL: a relaxed one widens where the
+	// credential can be filled, so it should never be invisible.
+	if entries, ok := meta["urlEntries"].([]any); ok {
+		for _, e := range entries {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			suffix := ""
+			if m["sub"] == true {
+				suffix = "  (also matches subdomains)"
+			}
+			fmt.Printf("%-12s %v%s\n", "url:", m["url"], suffix)
+		}
+	} else if urls, ok := meta["urls"].([]any); ok {
 		for _, u := range urls {
 			fmt.Printf("%-12s %v\n", "url:", u)
 		}
@@ -637,10 +695,29 @@ func cmdEdit(args []string) int {
 		"apiKey":           pick(*rf.apiKey, getStr("apiKey")),
 		"apiSecret":        pick(*rf.apiSecret, getStr("apiSecret")),
 	}
-	if urls := splitList(*rf.urls); urls != nil {
-		payload["urls"] = urls
-	} else {
-		payload["urls"] = meta.URLs
+	// URLs carry their matching policy, so edit must round-trip both or a save
+	// would silently reset an opt-in the user set earlier.
+	switch urls, subs := splitList(*rf.urls), splitList(*rf.subs); {
+	case urls != nil:
+		entries, err := urlEntries(urls, subs)
+		if err != nil {
+			return fail(err)
+		}
+		payload["urlEntries"] = entries
+	case subs != nil:
+		// --allow-subdomains on its own re-policies the URLs already stored,
+		// so turning it on does not mean retyping them.
+		existing := make([]string, 0, len(meta.URLEntries))
+		for _, e := range meta.URLEntries {
+			existing = append(existing, e.URL)
+		}
+		entries, err := urlEntries(existing, subs)
+		if err != nil {
+			return fail(err)
+		}
+		payload["urlEntries"] = entries
+	default:
+		payload["urlEntries"] = meta.URLEntries
 	}
 	if tags := splitList(*rf.tags); tags != nil {
 		payload["tags"] = tags
@@ -756,9 +833,11 @@ func cmdClients(args []string) int {
 	case "approve":
 		var pending struct {
 			Pending []struct {
-				PairingID string `json:"pairingId"`
-				Label     string `json:"label"`
-				Phrase    string `json:"phrase"`
+				PairingID    string   `json:"pairingId"`
+				KindName     string   `json:"kindName"`
+				Label        string   `json:"label"`
+				Phrase       string   `json:"phrase"`
+				Capabilities []string `json:"capabilities"`
 			} `json:"pending"`
 		}
 		if _, err := call("clients.pending", nil, &pending); err != nil {
@@ -769,7 +848,12 @@ func cmdClients(args []string) int {
 			return exitOK
 		}
 		p := pending.Pending[0]
-		fmt.Printf("Pairing request: %s\nPhrase: %s\n", p.Label, p.Phrase)
+		// Show the kind and every capability approval would grant: consent is
+		// only meaningful if the operator can see the privilege being asked for.
+		fmt.Printf("Pairing request: %s\nKind: %s\nPhrase: %s\nGrants:\n", p.Label, p.KindName, p.Phrase)
+		for _, c := range p.Capabilities {
+			fmt.Printf("  - %s\n", c)
+		}
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			fmt.Fprintln(os.Stderr, "vault: approval requires an interactive terminal")
 			return exitDenied

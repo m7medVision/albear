@@ -2,10 +2,34 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <% if (htmlWebpackPlugin.options.isDevelopment) { %>
+    <!--
+      Development only. webpack-dev-server needs a websocket back to localhost
+      for hot reload, and React Refresh evaluates the modules it injects. The
+      packaged policy below is the one that ships; keep the two in step.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="script-src 'self' 'unsafe-inline'"
+      content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
     />
+    <% } else { %>
+    <!--
+      Revealed secrets live in this renderer. `default-src 'none'` with
+      `connect-src 'none'` means a compromised renderer — a malicious
+      dependency, or script smuggled in through a record field — has nowhere to
+      send them: no fetch, no XHR, no WebSocket, no beacon, no image ping.
+
+      Nothing here needs the network. Every asset is bundled (see the extension
+      CSP rule in AGENTS.md), and the daemon is reached through the
+      contextBridge over a Unix socket, which CSP does not govern. Do not add a
+      host to connect-src: doing so hands an attacker the egress this is here
+      to deny.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+    />
+    <% } %>
     <title>Albear</title>
   </head>
   <body>

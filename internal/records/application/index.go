@@ -146,7 +146,7 @@ func (ix *Index) Match(page domain.CanonicalOrigin) []*IndexEntry {
 			continue
 		}
 		for _, u := range e.Metadata.URLs {
-			if u.Origin.Matches(page) {
+			if u.Matches(page) {
 				out = append(out, e)
 				break
 			}

@@ -43,7 +43,15 @@ These are load-bearing. Breaking one is a security bug, not a style problem.
    Destruction is explicit, interactive, and password-gated.
 8. **Secrets never reach logs**, error strings, or telemetry of any kind.
 9. **Fill/reveal requires explicit user action** and an exact origin match,
-   verified daemon-side — never trusted from the client.
+   verified daemon-side — never trusted from the client. "Exact" means
+   scheme + punycode host + effective port. A record URL may opt in to
+   matching hosts at or under itself (`AllowSubdomains`, stored in the
+   encrypted metadata); nothing else widens matching, and the client never
+   sends a policy.
+10. **Every mutating write re-stamps the vault-state root** in the same
+    transaction (`internal/catalog`). A write that skips it leaves a stale
+    root that panic-locks an untouched vault on the next unlock —
+    `TestEveryMutatingOpRestamps` enumerates the operations and will fail.
 
 ## Architecture
 
@@ -276,3 +284,15 @@ Fuzz targets (`go test -fuzz=<Name> -fuzztime=30s -run='^$' <pkg>`):
   (into browser config dirs). Prefer `--print-only` when testing.
 - The daemon holds the vault key in memory only; a restart locks it. Tests
   that expect an unlocked vault must unlock it themselves.
+- **Rollback protection is Tier 1 (in-DB) only.** The state root lives in the
+  database it protects, so replacing `vault.db` wholesale with an earlier,
+  self-consistent copy survives a daemon restart — the in-memory high-water
+  counter that catches it dies with the process. Row deletion, tampering,
+  revocation reverts, envelope downgrades and in-run rollback *are* caught.
+  Tier 2 (external trusted monotonic state: a TPM NV counter or an `O_EXCL`
+  sidecar) is a documented follow-up, not shipped. Don't describe this as full
+  rollback protection — see `docs/SECURITY.md`.
+- **Sessions die on lock.** After a lock, `authorize` denies rather than
+  re-minting, except for `vault.status`/`vault.unlock` (`lockedStateOps`) —
+  without that exemption the idle auto-lock would strand the desktop app and
+  extension, which hold persistent connections and don't reconnect on `DENIED`.

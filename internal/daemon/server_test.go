@@ -7,15 +7,19 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	accessdomain "github.com/m7medVision/albear/internal/access/domain"
 	"github.com/m7medVision/albear/internal/adapters/protocol"
 	"github.com/m7medVision/albear/internal/client"
 	"github.com/m7medVision/albear/internal/infrastructure/crypto"
 	"github.com/m7medVision/albear/internal/infrastructure/ipc"
 	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
 	transport "github.com/m7medVision/albear/internal/infrastructure/transport/noise"
+	shared "github.com/m7medVision/albear/internal/shared/domain"
 )
 
 var fastParams = crypto.KDFParams{MemoryKiB: crypto.MinMemoryKiB, Iterations: 3, Parallelism: 4}
@@ -155,12 +159,16 @@ func TestFullLifecycleOverSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Match.
+	// Match: exact origin only, unless the record opted in.
 	var match struct {
 		Records []map[string]any `json:"records"`
 	}
-	if err := c.Call("records.match", map[string]string{"origin": "https://www.github.com"}, &match); err != nil || len(match.Records) != 1 {
+	if err := c.Call("records.match", map[string]string{"origin": "https://github.com"}, &match); err != nil || len(match.Records) != 1 {
 		t.Fatalf("%v %d", err, len(match.Records))
+	}
+	c.Call("records.match", map[string]string{"origin": "https://www.github.com"}, &match)
+	if len(match.Records) != 0 {
+		t.Fatal("subdomain matched without the opt-in")
 	}
 	c.Call("records.match", map[string]string{"origin": "https://github.com.evil.example"}, &match)
 	if len(match.Records) != 0 {
@@ -180,13 +188,147 @@ func TestFullLifecycleOverSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Lock: record operations now fail with VAULT_LOCKED.
+	// Lock: the connection's session dies with the vault, so record
+	// operations are denied rather than re-authorized against a locked vault.
 	if err := c.Call("vault.lock", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	err = c.Call("records.list", nil, nil)
-	if apiCode(t, err) != protocol.CodeVaultLocked {
+	if apiCode(t, err) != protocol.CodeDenied {
 		t.Fatal(err)
+	}
+}
+
+// TestIdleAutoLock drives the idle check with a synthetic clock rather than
+// sleeping: the sessions carry real timestamps, and enforceIdleLock is handed
+// a "now" past the policy window.
+func TestIdleAutoLock(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+	c.Call("records.create", map[string]any{"name": "n", "type": "note", "notes": "body"}, nil)
+
+	ctx := context.Background()
+	window := d.server.vault.LockPolicy().AutoLockAfter
+	last, ok := d.server.sessions.LastActivity()
+	if !ok {
+		t.Fatal("no session activity after unlock")
+	}
+
+	// Inside the window the vault stays unlocked.
+	if d.server.enforceIdleLock(ctx, last.Add(window-time.Second)) {
+		t.Fatal("locked before the idle window elapsed")
+	}
+	if !d.server.vault.IsUnlocked() {
+		t.Fatal("vault locked early")
+	}
+
+	// Past the window it locks, wiping keys and every session.
+	if !d.server.enforceIdleLock(ctx, last.Add(window+time.Second)) {
+		t.Fatal("idle vault did not auto-lock")
+	}
+	if d.server.vault.IsUnlocked() {
+		t.Fatal("vault still unlocked after idle lock")
+	}
+	if _, err := d.server.vault.Keys(); !errors.Is(err, shared.ErrVaultLocked) {
+		t.Fatalf("keyring survived idle lock: %v", err)
+	}
+	if n := d.server.sessions.Count(); n != 0 {
+		t.Fatalf("%d sessions survived idle lock", n)
+	}
+
+	// Invariant 7: locking never destroys. The vault is still there.
+	c2 := cliConn(t, d)
+	var status struct {
+		Initialized bool `json:"initialized"`
+		Unlocked    bool `json:"unlocked"`
+	}
+	if err := c2.Call("vault.status", nil, &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Initialized || status.Unlocked {
+		t.Fatalf("idle lock destroyed or failed to lock the vault: %+v", status)
+	}
+	if err := c2.Call("vault.unlock", map[string]string{"password": "master password"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Records []map[string]any `json:"records"`
+	}
+	if err := c2.Call("records.list", nil, &list); err != nil || len(list.Records) != 1 {
+		t.Fatalf("records lost to idle lock: %d %v", len(list.Records), err)
+	}
+}
+
+// TestStatusPollingDoesNotDeferIdleLock covers the polling exemption: the
+// desktop app and popup poll vault.status on a timer, which must not keep an
+// unattended vault unlocked.
+func TestStatusPollingDoesNotDeferIdleLock(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+
+	before, ok := d.server.sessions.LastActivity()
+	if !ok {
+		t.Fatal("no session activity after unlock")
+	}
+	for i := 0; i < 3; i++ {
+		if err := c.Call("vault.status", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, _ := d.server.sessions.LastActivity()
+	if !after.Equal(before) {
+		t.Fatalf("status polling reset the idle timer: %v -> %v", before, after)
+	}
+
+	// A capability-using request does extend it.
+	if err := c.Call("records.list", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if moved, _ := d.server.sessions.LastActivity(); !moved.After(before) {
+		t.Fatal("real activity did not extend the idle deadline")
+	}
+}
+
+// TestLockedVaultDeniesLiveConnection is the other half of "sessions die on
+// lock": no replacement session is minted while locked, but the connection can
+// still see status and unlock, or it could never recover without reconnecting.
+func TestLockedVaultDeniesLiveConnection(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+
+	if err := c.Call("vault.lock", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := d.server.sessions.Count(); n != 0 {
+		t.Fatalf("%d sessions survived lock", n)
+	}
+
+	// Capability-bearing operations are denied with no re-mint.
+	for _, op := range []string{"records.list", "records.reveal", "backup.create", "clients.list"} {
+		err := c.Call(op, map[string]string{"ref": "x", "path": "/x"}, nil)
+		if apiCode(t, err) != protocol.CodeDenied {
+			t.Fatalf("%s: %v", op, err)
+		}
+		if n := d.server.sessions.Count(); n != 0 {
+			t.Fatalf("%s minted a session while locked", op)
+		}
+	}
+
+	// Status and unlock stay reachable on the authenticated connection.
+	var status struct {
+		Unlocked bool `json:"unlocked"`
+	}
+	if err := c.Call("vault.status", nil, &status); err != nil || status.Unlocked {
+		t.Fatalf("status while locked: %+v %v", status, err)
+	}
+	if err := c.Call("vault.unlock", map[string]string{"password": "master password"}, nil); err != nil {
+		t.Fatalf("live connection could not unlock: %v", err)
+	}
+	if err := c.Call("records.list", nil, nil); err != nil {
+		t.Fatalf("session not restored after unlock: %v", err)
 	}
 }
 
@@ -206,6 +348,50 @@ func TestWrongPasswordAndRateLimit(t *testing.T) {
 	err := c.Call("vault.unlock", map[string]string{"password": "master password"}, nil)
 	if apiCode(t, err) != protocol.CodeRateLimited {
 		t.Fatal(err)
+	}
+}
+
+// TestPasswordPolicyGatesInitAndChange: the strength policy is the only thing
+// standing between a guessable master password and the whole vault, so it must
+// apply at both entry points.
+func TestPasswordPolicyGatesInitAndChange(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+
+	weak := []string{"hunter2", "password1234", "abcdefghijkm", "aaaaaaaaaaaaaaaa"}
+	for _, pw := range weak {
+		err := c.Call("vault.init", map[string]string{"password": pw}, nil)
+		if apiCode(t, err) != protocol.CodeWeakPassword {
+			t.Fatalf("init accepted %q: %v", pw, err)
+		}
+	}
+	// Nothing was created by a rejected init.
+	var status struct {
+		Initialized bool `json:"initialized"`
+	}
+	if err := c.Call("vault.status", nil, &status); err != nil || status.Initialized {
+		t.Fatalf("weak init created a vault: %+v %v", status, err)
+	}
+
+	initAndUnlock(t, c)
+
+	// The same floor applies on change, and a rejected change leaves the
+	// current password working.
+	for _, pw := range weak {
+		err := c.Call("vault.changePassword", map[string]string{
+			"current": "master password", "next": pw,
+		}, nil)
+		if apiCode(t, err) != protocol.CodeWeakPassword {
+			t.Fatalf("change accepted %q: %v", pw, err)
+		}
+	}
+	if err := c.Call("records.list", nil, nil); err != nil {
+		t.Fatalf("rejected change disturbed the vault: %v", err)
+	}
+	if err := c.Call("vault.changePassword", map[string]string{
+		"current": "master password", "next": "a genuinely long passphrase",
+	}, nil); err != nil {
+		t.Fatalf("strong passphrase rejected: %v", err)
 	}
 }
 
@@ -318,6 +504,207 @@ func TestPairingFlowEndToEnd(t *testing.T) {
 	}
 	if _, err := client.DialPaired(d.socket, extKey, claim.ClientID, credential, daemonKey); err == nil {
 		t.Fatal("revoked client reconnected")
+	}
+}
+
+// TestPairingRejectsAdministrativeKinds covers the privilege-escalation fix:
+// the pairing channel is reachable by any same-user process, so it must not
+// hand out the administrative capability set.
+func TestPairingRejectsAdministrativeKinds(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+
+	extKey, _ := transport.GenerateStaticKey()
+	pairConn, err := client.DialPairing(d.socket, extKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pairConn.Close()
+
+	// KindCLI (1) and KindAdministrativeTool (4) both map to CLICapabilities.
+	for _, kind := range []int{1, 4} {
+		err := pairConn.Call("clients.pair", map[string]any{
+			"kind": kind, "label": "evil@test", "staticKey": hex.EncodeToString(extKey.Public),
+		}, nil)
+		if apiCode(t, err) != protocol.CodeInvalid {
+			t.Fatalf("kind %d accepted over pairing: %v", kind, err)
+		}
+	}
+	// A rejected request must leave nothing behind to approve.
+	var pending struct {
+		Pending []struct {
+			PairingID string `json:"pairingId"`
+		} `json:"pending"`
+	}
+	if err := cli.Call("clients.pending", nil, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if len(pending.Pending) != 0 {
+		t.Fatalf("rejected pairing left %d pending", len(pending.Pending))
+	}
+
+	// The browser kind still pairs, with the restricted set.
+	var ok struct {
+		PairingID string `json:"pairingId"`
+	}
+	if err := pairConn.Call("clients.pair", map[string]any{
+		"kind": 2, "label": "chrome@test", "staticKey": hex.EncodeToString(extKey.Public),
+	}, &ok); err != nil || ok.PairingID == "" {
+		t.Fatalf("chrome extension could not pair: %v", err)
+	}
+}
+
+// TestPendingDisclosesKindAndCapabilities: the operator must see the privilege
+// they are approving, not just a label and a phrase.
+func TestPendingDisclosesKindAndCapabilities(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+
+	extKey, _ := transport.GenerateStaticKey()
+	pairConn, err := client.DialPairing(d.socket, extKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pairConn.Close()
+	if err := pairConn.Call("clients.pair", map[string]any{
+		"kind": 2, "label": "chrome@test", "staticKey": hex.EncodeToString(extKey.Public),
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var pending struct {
+		Pending []struct {
+			KindName     string   `json:"kindName"`
+			Capabilities []string `json:"capabilities"`
+		} `json:"pending"`
+	}
+	if err := cli.Call("clients.pending", nil, &pending); err != nil || len(pending.Pending) != 1 {
+		t.Fatal(err)
+	}
+	p := pending.Pending[0]
+	if p.KindName != "chrome-extension" {
+		t.Fatalf("kind not disclosed: %q", p.KindName)
+	}
+	want := accessdomain.ChromeCapabilities.Names()
+	if len(p.Capabilities) != len(want) {
+		t.Fatalf("capabilities not disclosed: %v", p.Capabilities)
+	}
+	for i, c := range want {
+		if p.Capabilities[i] != c {
+			t.Fatalf("capability %d: got %q want %q", i, p.Capabilities[i], c)
+		}
+	}
+	// Disclosure must not leak the administrative set into a browser prompt.
+	for _, c := range p.Capabilities {
+		if c == "clients.admin" || c == "vault.destroy" || c == "backup.create" {
+			t.Fatalf("browser pairing discloses admin capability %q", c)
+		}
+	}
+}
+
+// pairExtension runs the full pairing dance and returns a paired Chrome-kind
+// connection, which is the only kind that carries createLogin/updateLogin.
+func pairExtension(t *testing.T, d *testDaemon, cli *client.Client) *client.Client {
+	t.Helper()
+	extKey, _ := transport.GenerateStaticKey()
+	pairConn, err := client.DialPairing(d.socket, extKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pairConn.Close()
+
+	var pairResp struct {
+		PairingID string `json:"pairingId"`
+	}
+	if err := pairConn.Call("clients.pair", map[string]any{
+		"kind": 2, "label": "chrome@test", "staticKey": hex.EncodeToString(extKey.Public),
+	}, &pairResp); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Call("clients.approve", map[string]string{"pairingId": pairResp.PairingID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var claim struct {
+		ClientID        string `json:"clientId"`
+		Credential      string `json:"credential"`
+		DaemonStaticKey string `json:"daemonStaticKey"`
+	}
+	if err := pairConn.Call("clients.claim", map[string]string{"pairingId": pairResp.PairingID}, &claim); err != nil {
+		t.Fatal(err)
+	}
+	credential, _ := hex.DecodeString(claim.Credential)
+	daemonKey, _ := hex.DecodeString(claim.DaemonStaticKey)
+	ext, err := client.DialPaired(d.socket, extKey, claim.ClientID, credential, daemonKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ext.Close() })
+	return ext
+}
+
+// TestLoginScopedRecordOps: the browser capabilities cover logins only, and
+// that scope is enforced daemon-side rather than trusted from the client.
+func TestLoginScopedRecordOps(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+	ext := pairExtension(t, d, cli)
+
+	// A client-supplied non-login type is overridden, not honoured.
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := ext.Call("records.createLogin", map[string]any{
+		"type": "api", "name": "ApiKey", "username": "mo",
+		"urls": []string{"https://example.com"}, "password": "pw",
+	}, &created); err != nil {
+		t.Fatal(err)
+	}
+	// Read back over the CLI: the extension cannot read records itself.
+	var shown struct {
+		Type string `json:"type"`
+	}
+	if err := cli.Call("records.show", map[string]string{"ref": created.ID}, &shown); err != nil {
+		t.Fatal(err)
+	}
+	if shown.Type != "login" {
+		t.Fatalf("createLogin produced a %q record", shown.Type)
+	}
+
+	// updateLogin must refuse a record that is not a login.
+	var note struct {
+		ID string `json:"id"`
+	}
+	if err := cli.Call("records.create", map[string]any{
+		"type": "note", "name": "Secrets", "notes": "body",
+	}, &note); err != nil {
+		t.Fatal(err)
+	}
+	err := ext.Call("records.updateLogin", map[string]any{
+		"id": note.ID, "expectedRevision": 1, "name": "Secrets", "notes": "overwritten",
+	}, nil)
+	if apiCode(t, err) != protocol.CodeDenied {
+		t.Fatalf("updateLogin touched a note: %v", err)
+	}
+	// The note is untouched.
+	var revealed struct {
+		Notes string `json:"notes"`
+	}
+	if err := cli.Call("records.reveal", map[string]string{"ref": note.ID}, &revealed); err != nil {
+		t.Fatal(err)
+	}
+	if revealed.Notes != "body" {
+		t.Fatalf("note was modified: %q", revealed.Notes)
+	}
+
+	// updateLogin still works on an actual login.
+	if err := ext.Call("records.updateLogin", map[string]any{
+		"id": created.ID, "expectedRevision": 1, "name": "ApiKey", "username": "mo",
+		"urls": []string{"https://example.com"}, "password": "pw2",
+	}, nil); err != nil {
+		t.Fatalf("updateLogin on a login: %v", err)
 	}
 }
 
@@ -453,6 +840,90 @@ func TestRevealForOriginPolicy(t *testing.T) {
 	if apiCode(t, err) != protocol.CodeDenied {
 		t.Fatal("http fill allowed by default")
 	}
+
+	// A sibling subdomain is a different site. This is the escalation the
+	// exact default closes: on a shared apex, evil.example.com must not be
+	// handed the credential for accounts.example.com.
+	err = cli.Call("records.revealForOrigin", map[string]string{
+		"id": created.ID, "origin": "https://evil.github.com",
+	}, nil)
+	if apiCode(t, err) != protocol.CodeDenied {
+		t.Fatal("sibling subdomain reveal allowed by default")
+	}
+}
+
+// TestRevealForOriginSubdomainOptIn: the opt-in is read from the stored record
+// daemon-side (invariant 9). A client never sends a policy, so a compromised
+// one cannot widen its own matching.
+func TestRevealForOriginSubdomainOptIn(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+
+	var loose struct {
+		ID string `json:"id"`
+	}
+	if err := cli.Call("records.create", map[string]any{
+		"name": "Example", "username": "mo", "password": "pw",
+		"urlEntries": []map[string]any{{"url": "https://example.com", "sub": true}},
+	}, &loose); err != nil {
+		t.Fatal(err)
+	}
+
+	// The opt-in reaches subdomains…
+	var out struct {
+		Password string `json:"password"`
+	}
+	if err := cli.Call("records.revealForOrigin", map[string]string{
+		"id": loose.ID, "origin": "https://accounts.example.com",
+	}, &out); err != nil || out.Password != "pw" {
+		t.Fatalf("opted-in subdomain reveal: %+v %v", out, err)
+	}
+	// …and no further.
+	for _, origin := range []string{
+		"https://evil-example.com",
+		"https://example.com.attacker.example",
+		"http://www.example.com",
+	} {
+		err := cli.Call("records.revealForOrigin", map[string]string{
+			"id": loose.ID, "origin": origin,
+		}, nil)
+		if apiCode(t, err) != protocol.CodeDenied {
+			t.Fatalf("%s allowed against an opted-in record: %v", origin, err)
+		}
+	}
+
+	// The stored policy is what counts: a record saved without the opt-in
+	// stays exact no matter what the client asks for.
+	var strict struct {
+		ID string `json:"id"`
+	}
+	if err := cli.Call("records.create", map[string]any{
+		"name": "Strict", "username": "mo", "password": "pw",
+		"urls": []string{"https://strict.example"},
+	}, &strict); err != nil {
+		t.Fatal(err)
+	}
+	err := cli.Call("records.revealForOrigin", map[string]string{
+		"id": strict.ID, "origin": "https://www.strict.example",
+	}, nil)
+	if apiCode(t, err) != protocol.CodeDenied {
+		t.Fatalf("plain urls field granted subdomain matching: %v", err)
+	}
+
+	// The flag round-trips to the editor so a later save does not reset it.
+	var view struct {
+		URLEntries []struct {
+			URL string `json:"url"`
+			Sub bool   `json:"sub"`
+		} `json:"urlEntries"`
+	}
+	if err := cli.Call("records.show", map[string]string{"ref": loose.ID}, &view); err != nil {
+		t.Fatal(err)
+	}
+	if len(view.URLEntries) != 1 || !view.URLEntries[0].Sub {
+		t.Fatalf("opt-in not surfaced to clients: %+v", view.URLEntries)
+	}
 }
 
 func TestChangePasswordOverSocket(t *testing.T) {
@@ -544,6 +1015,64 @@ func TestDestroyRequiresPassword(t *testing.T) {
 	}
 	if status.Initialized {
 		t.Fatal("vault survived destroy")
+	}
+}
+
+// TestDestroyRemovesEveryCopy: a .recovery file left by an earlier restore is
+// a complete, openable vault. Destroy that leaves it behind reports success
+// while the secrets are still on disk.
+func TestDestroyRemovesEveryCopy(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+
+	// Stand in for what a previous restore leaves behind. The live -wal/-shm
+	// are not staged here: they belong to the open database, and writing to
+	// them would corrupt it rather than test anything.
+	recovery := d.dbPath + ".recovery"
+	if err := os.WriteFile(recovery, []byte("previous vault"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Call("vault.destroy", map[string]string{"password": "master password"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(recovery); !os.IsNotExist(err) {
+		t.Fatalf("destroy left the .recovery copy on disk: %v", err)
+	}
+}
+
+// TestDestroySurfacesDeletionFailure: reporting success while a copy of the
+// vault survives is worse than reporting the failure.
+func TestDestroySurfacesDeletionFailure(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+
+	// Make the .recovery file undeletable by removing write permission on its
+	// directory: unlink needs write on the parent, not the file.
+	recovery := d.dbPath + ".recovery"
+	if err := os.WriteFile(recovery, []byte("previous vault"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(d.dbPath)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+
+	// root ignores directory permissions, so this can only be asserted as a
+	// non-root user.
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permissions do not block unlink")
+	}
+
+	err := d.server.destroyVault()
+	if err == nil {
+		t.Fatal("destroy reported success while a vault copy survived")
+	}
+	if _, statErr := os.Stat(recovery); statErr != nil {
+		t.Fatal("test did not actually block deletion")
 	}
 }
 

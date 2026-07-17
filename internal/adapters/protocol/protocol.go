@@ -9,6 +9,7 @@ import (
 
 	shared "github.com/m7medVision/albear/internal/shared/domain"
 	vaultapp "github.com/m7medVision/albear/internal/vault/application"
+	vaultdomain "github.com/m7medVision/albear/internal/vault/domain"
 )
 
 const Version = 1
@@ -45,6 +46,7 @@ const (
 	CodeRateLimited   = "RATE_LIMITED"
 	CodeExists        = "ALREADY_EXISTS"
 	CodeUninitialized = "NOT_INITIALIZED"
+	CodeWeakPassword  = "WEAK_PASSWORD"
 	CodeInternal      = "INTERNAL"
 )
 
@@ -59,7 +61,10 @@ var codeMessages = map[string]string{
 	CodeRateLimited:   "Too many attempts. Try again later.",
 	CodeExists:        "The vault already exists.",
 	CodeUninitialized: "No vault exists. Run `vault init` first.",
-	CodeInternal:      "Internal failure.",
+	// Says what is required without naming the rule that tripped, so a weak
+	// password gets rewritten rather than nudged until it just barely passes.
+	CodeWeakPassword: "The master password is too weak. Use at least 12 characters; a long passphrase is the easiest way to pass.",
+	CodeInternal:     "Internal failure.",
 }
 
 // MapError converts any error into a wire error with a fixed, non-sensitive
@@ -79,6 +84,8 @@ func MapError(err error) *WireError {
 		code = CodeIntegrity
 	case errors.Is(err, shared.ErrRevisionConflict):
 		code = CodeConflict
+	case errors.Is(err, vaultdomain.ErrWeakPassword):
+		code = CodeWeakPassword
 	case errors.Is(err, shared.ErrValidation):
 		code = CodeInvalid
 	case errors.Is(err, shared.ErrVaultExists):

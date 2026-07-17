@@ -2,7 +2,7 @@
 // offer rendered after a form submit; the content script decides which mode
 // (save / update vs save-as-new) and gates on the vault being unlocked.
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { detectLoginForms } from '../src/content/forms'
 import {
   decideMode,
@@ -25,6 +25,60 @@ function dispatchSubmit(form: HTMLFormElement): void {
 }
 
 const candidate = { username: 'alice@example.com', password: 'hunter2' }
+
+// A real user click, as opposed to a synthetic one.
+//
+// jsdom cannot produce a trusted event: it pins isTrusted behind a
+// non-configurable own accessor (so the instance cannot be patched), and
+// dispatchEvent then assigns isTrusted = false per the DOM spec (so setting it
+// beforehand is undone). Forcing the getter on the internal impl is what
+// survives both. That there is no ordinary way to do this is the security
+// property under test — a hostile page has no impl handle either.
+function userClick(el: HTMLElement): void {
+  const ev = new MouseEvent('click', { bubbles: true, cancelable: true })
+  const impl = Object.getOwnPropertySymbols(ev)
+    .map((s) => (ev as unknown as Record<symbol, unknown>)[s])
+    .find((v): v is object => !!v && typeof v === 'object' && 'isTrusted' in v)
+  if (!impl) throw new Error('jsdom event impl not found: cannot simulate a trusted click')
+  Object.defineProperty(impl, 'isTrusted', {
+    get: () => true,
+    set: () => {}, // swallow dispatchEvent's "isTrusted = false"
+    configurable: true,
+  })
+  el.dispatchEvent(ev)
+}
+
+// A click a hostile page could dispatch. Identical to what `el.click()`
+// produces: isTrusted false.
+function syntheticClick(el: HTMLElement): void {
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+}
+
+// The bar mounts in a *closed* shadow root, so nothing in the page can reach
+// its controls through the DOM — this test file included. Tests that need the
+// buttons capture the root as it is created. Page script gets no such
+// opportunity, which is exactly the property being tested.
+let barRoot: ShadowRoot | null = null
+const realAttachShadow = Element.prototype.attachShadow
+
+beforeAll(() => {
+  Element.prototype.attachShadow = function attachShadowSpy(
+    this: Element,
+    init: ShadowRootInit,
+  ): ShadowRoot {
+    const root = realAttachShadow.call(this, init)
+    if ((this as HTMLElement).id === 'albear-save-bar') barRoot = root
+    return root
+  }
+})
+
+afterAll(() => {
+  Element.prototype.attachShadow = realAttachShadow
+})
+
+beforeEach(() => {
+  barRoot = null
+})
 
 function optsFor(
   mode: 'save' | 'update',
@@ -82,7 +136,7 @@ describe('renderSaveBar (save mode)', () => {
     })
     const bar = renderSaveBar(opts)
     const [save] = bar.el.querySelectorAll<HTMLButtonElement>('button')
-    save!.click()
+    userClick(save!)
     await vi.waitFor(() => expect(bar.el.isConnected).toBe(false))
     expect(onSave).toHaveBeenCalledWith(candidate)
   })
@@ -96,7 +150,7 @@ describe('renderSaveBar (save mode)', () => {
     })
     const bar = renderSaveBar(opts)
     const [save] = bar.el.querySelectorAll<HTMLButtonElement>('button')
-    save!.click()
+    userClick(save!)
     await vi.waitFor(() => expect(bar.el.isConnected).toBe(true))
     expect(bar.el.textContent).toContain('VAULT_LOCKED')
     bar.remove()
@@ -107,7 +161,7 @@ describe('renderSaveBar (save mode)', () => {
     const opts = optsFor('save', null, { onSave, onUpdate: vi.fn(), onSaveNew: vi.fn() })
     const bar = renderSaveBar(opts)
     const buttons = bar.el.querySelectorAll<HTMLButtonElement>('button')
-    buttons[1]!.click()
+    userClick(buttons[1]!)
     expect(bar.el.isConnected).toBe(false)
     expect(onSave).not.toHaveBeenCalled()
   })
@@ -146,7 +200,7 @@ describe('renderSaveBar (update mode)', () => {
     })
     const bar = renderSaveBar(opts)
     const [update] = bar.el.querySelectorAll<HTMLButtonElement>('button')
-    update!.click()
+    userClick(update!)
     await vi.waitFor(() => expect(bar.el.isConnected).toBe(false))
     expect(onUpdate).toHaveBeenCalledWith(existing, candidate)
   })
@@ -160,9 +214,104 @@ describe('renderSaveBar (update mode)', () => {
     })
     const bar = renderSaveBar(opts)
     const [, saveNew] = bar.el.querySelectorAll<HTMLButtonElement>('button')
-    saveNew!.click()
+    userClick(saveNew!)
     await vi.waitFor(() => expect(bar.el.isConnected).toBe(false))
     expect(onSaveNew).toHaveBeenCalledWith(candidate)
+  })
+})
+
+// ---- hostile page ----------------------------------------------------------
+//
+// The bar renders on pages we do not control, and every one of its buttons
+// either stores a credential or overwrites one. These cover what a hostile
+// page can do to it.
+
+describe('renderSaveBar hardening', () => {
+  const cbs = () => ({ onSave: vi.fn(), onUpdate: vi.fn(), onSaveNew: vi.fn() })
+
+  it('ignores synthetic clicks on every save-mode button', () => {
+    const c = cbs()
+    const bar = renderSaveBar(optsFor('save', null, c))
+    const [save, dismiss] = bar.el.querySelectorAll<HTMLButtonElement>('button')
+
+    syntheticClick(save!)
+    expect(c.onSave).not.toHaveBeenCalled()
+    expect(bar.el.isConnected).toBe(true)
+
+    // `el.click()` is the same thing by another name.
+    save!.click()
+    expect(c.onSave).not.toHaveBeenCalled()
+
+    // Even Dismiss: a page that could close the bar could suppress the offer.
+    syntheticClick(dismiss!)
+    expect(bar.el.isConnected).toBe(true)
+
+    bar.remove()
+  })
+
+  it('ignores synthetic clicks on every update-mode button', () => {
+    const c = cbs()
+    const existing: ExistingRecord = { id: 'r1', revision: 7, name: 'Ex', username: 'alice' }
+    const bar = renderSaveBar(optsFor('update', existing, c))
+    const [update, saveNew] = bar.el.querySelectorAll<HTMLButtonElement>('button')
+
+    syntheticClick(update!)
+    syntheticClick(saveNew!)
+    expect(c.onUpdate).not.toHaveBeenCalled()
+    expect(c.onSaveNew).not.toHaveBeenCalled()
+    expect(bar.el.isConnected).toBe(true)
+    bar.remove()
+  })
+
+  it('still honours a real user click after ignoring a synthetic one', async () => {
+    const c = cbs()
+    c.onSave.mockResolvedValue(undefined)
+    const bar = renderSaveBar(optsFor('save', null, c))
+    const [save] = bar.el.querySelectorAll<HTMLButtonElement>('button')
+
+    syntheticClick(save!)
+    expect(c.onSave).not.toHaveBeenCalled()
+
+    userClick(save!)
+    await vi.waitFor(() => expect(c.onSave).toHaveBeenCalledWith(candidate))
+  })
+
+  it('mounts in a closed shadow root the page cannot reach into', () => {
+    const bar = renderSaveBar(optsFor('save', null, cbs()))
+
+    const host = document.getElementById('albear-save-bar')
+    expect(host).not.toBeNull()
+    // Closed: the page gets no handle on the root.
+    expect(host!.shadowRoot).toBeNull()
+    // So the controls and the candidate username are unreachable from the
+    // page's DOM, however the page goes looking.
+    expect(document.querySelectorAll('#albear-save-bar button')).toHaveLength(0)
+    expect(document.querySelectorAll('button')).toHaveLength(0)
+    expect(document.body.textContent).not.toContain(candidate.username)
+    expect(document.documentElement.textContent).not.toContain(candidate.username)
+
+    bar.remove()
+  })
+
+  it('remove() takes the host with it, leaving nothing in the page', () => {
+    const bar = renderSaveBar(optsFor('save', null, cbs()))
+    expect(document.getElementById('albear-save-bar')).not.toBeNull()
+    bar.remove()
+    expect(document.getElementById('albear-save-bar')).toBeNull()
+  })
+
+  it('a dismiss click removes the host, not just the inner bar', () => {
+    const bar = renderSaveBar(optsFor('save', null, cbs()))
+    const [, dismiss] = bar.el.querySelectorAll<HTMLButtonElement>('button')
+    userClick(dismiss!)
+    expect(document.getElementById('albear-save-bar')).toBeNull()
+  })
+
+  it('re-rendering replaces the previous bar rather than stacking hosts', () => {
+    renderSaveBar(optsFor('save', null, cbs()))
+    const second = renderSaveBar(optsFor('save', null, cbs()))
+    expect(document.querySelectorAll('#albear-save-bar')).toHaveLength(1)
+    second.remove()
   })
 })
 
@@ -259,11 +408,9 @@ describe('content script: save flow on submit', () => {
     await loadContentScript()
     dispatchSubmit(document.querySelector('form')!)
     await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).not.toBeNull())
-    const buttons = Array.from(
-      document.querySelectorAll('#albear-save-bar button'),
-    ) as HTMLButtonElement[]
+    const buttons = Array.from(barRoot!.querySelectorAll('button')) as HTMLButtonElement[]
     expect(buttons.map((b) => b.textContent)).toEqual(['Save', 'Dismiss'])
-    buttons[0]!.click()
+    userClick(buttons[0]!)
     await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).toBeNull())
     const saveCall = state.calls.find((m) => m['kind'] === 'records.saveLogin')
     expect(saveCall).toBeDefined()
@@ -321,11 +468,9 @@ describe('content script: save flow on submit', () => {
     await loadContentScript()
     dispatchSubmit(document.querySelector('form')!)
     await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).not.toBeNull())
-    const buttons = Array.from(
-      document.querySelectorAll('#albear-save-bar button'),
-    ) as HTMLButtonElement[]
+    const buttons = Array.from(barRoot!.querySelectorAll('button')) as HTMLButtonElement[]
     expect(buttons.map((b) => b.textContent)).toEqual(['Update', 'Save as new', 'Dismiss'])
-    buttons[0]!.click()
+    userClick(buttons[0]!)
     await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).toBeNull())
     const updateCall = state.calls.find((m) => m['kind'] === 'records.updateLogin')
     expect(updateCall).toBeDefined()
@@ -352,12 +497,10 @@ describe('content script: save flow on submit', () => {
     await loadContentScript()
     dispatchSubmit(document.querySelector('form')!)
     await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).not.toBeNull())
-    const [save] = Array.from(
-      document.querySelectorAll('#albear-save-bar button'),
-    ) as HTMLButtonElement[]
-    save!.click()
+    const [save] = Array.from(barRoot!.querySelectorAll('button')) as HTMLButtonElement[]
+    userClick(save!)
     await vi.waitFor(() =>
-      expect(document.getElementById('albear-save-bar')!.textContent).toContain('VAULT_LOCKED'),
+      expect(barRoot!.textContent).toContain('VAULT_LOCKED'),
     )
   })
 
@@ -415,11 +558,12 @@ describe('content script: formless login pattern', () => {
     const btn = document.querySelector<HTMLButtonElement>('#submit')!
     btn.click()
     await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).not.toBeNull())
-    const buttons = Array.from(
-      document.querySelectorAll<HTMLButtonElement>('#albear-save-bar button'),
-    )
+    // Reached through the captured root, not the page: `#albear-save-bar
+    // button` finds nothing now, and a hostile page sits in exactly the
+    // position this test would be abusing.
+    const buttons = Array.from(barRoot!.querySelectorAll<HTMLButtonElement>('button'))
     expect(buttons.map((b) => b.textContent)).toEqual(['Save', 'Dismiss'])
-    buttons[0]!.click()
+    userClick(buttons[0]!)
     await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).toBeNull())
     const saveCall = state.calls.find((m) => m['kind'] === 'records.saveLogin')
     expect(saveCall).toBeDefined()
@@ -520,11 +664,12 @@ describe('content script: resumes a capture stashed by a previous page', () => {
     installChrome(state)
     await loadContentScript()
     await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).not.toBeNull())
-    const buttons = Array.from(
-      document.querySelectorAll<HTMLButtonElement>('#albear-save-bar button'),
-    )
+    // Reached through the captured root, not the page: `#albear-save-bar
+    // button` finds nothing now, and a hostile page sits in exactly the
+    // position this test would be abusing.
+    const buttons = Array.from(barRoot!.querySelectorAll<HTMLButtonElement>('button'))
     expect(buttons.map((b) => b.textContent)).toEqual(['Save', 'Dismiss'])
-    buttons[0]!.click()
+    userClick(buttons[0]!)
     await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).toBeNull())
     const saveCall = state.calls.find((m) => m['kind'] === 'records.saveLogin')
     expect(saveCall!['username']).toBe('alice')

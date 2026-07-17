@@ -16,6 +16,10 @@ import (
 type KeySource interface {
 	Keys() (*vaultapp.Keyring, error)
 	VaultInfo() (vaultID []byte, formatVersion, keyVersion uint32, err error)
+	// NoteCatalogCounter reports a committed vault-state counter back to the
+	// Vault Security context, which owns the in-process high-water mark used
+	// to spot rollback. This context stamps the root but does not track it.
+	NoteCatalogCounter(counter int64)
 }
 
 // Clock is re-exported for injection.

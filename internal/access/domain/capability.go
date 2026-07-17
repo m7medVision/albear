@@ -39,6 +39,45 @@ func NewCapabilitySet(caps ...Capability) CapabilitySet {
 
 func (s CapabilitySet) Has(c Capability) bool { return uint64(s)&uint64(c) != 0 }
 
+// capabilityNames gives every bit a stable wire name. Approval prompts show
+// these, so an operator reads what a pairing request is asking for.
+var capabilityNames = []struct {
+	cap  Capability
+	name string
+}{
+	{CapVaultStatus, "vault.status"},
+	{CapVaultUnlock, "vault.unlock"},
+	{CapVaultLock, "vault.lock"},
+	{CapRecordList, "records.list"},
+	{CapRecordRead, "records.read"},
+	{CapRecordReveal, "records.reveal"},
+	{CapRecordWrite, "records.write"},
+	{CapRecordDelete, "records.delete"},
+	{CapRecordMatch, "records.match"},
+	{CapRecordRevealForOrigin, "records.revealForOrigin"},
+	{CapRecordCreateLogin, "records.createLogin"},
+	{CapRecordUpdateLogin, "records.updateLogin"},
+	{CapPasswordGenerate, "password.generate"},
+	{CapBackupCreate, "backup.create"},
+	{CapBackupRestore, "backup.restore"},
+	{CapClientAdmin, "clients.admin"},
+	{CapPasswordChange, "vault.changePassword"},
+	{CapVaultDestroy, "vault.destroy"},
+	{CapRelay, "relay"},
+	{CapPair, "pair"},
+}
+
+// Names lists the set's capabilities in declaration order.
+func (s CapabilitySet) Names() []string {
+	out := make([]string, 0, len(capabilityNames))
+	for _, c := range capabilityNames {
+		if s.Has(c.cap) {
+			out = append(out, c.name)
+		}
+	}
+	return out
+}
+
 // CLICapabilities is the full administrative set (PRD section 18.1).
 var CLICapabilities = NewCapabilitySet(
 	CapVaultStatus, CapVaultUnlock, CapVaultLock,

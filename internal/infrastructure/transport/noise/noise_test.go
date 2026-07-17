@@ -407,3 +407,38 @@ func FuzzServerHandshakeHello(f *testing.F) {
 		<-done
 	})
 }
+
+// TestZeroLengthFrameRejected: a frame carrying no bytes cannot be genuine —
+// every Noise transport message includes its 16-byte auth tag, and the hello
+// is JSON. Found by FuzzServerHandshakeHello, which deadlocked on it: the
+// reader takes the header and never reads a body, so a synchronous writer
+// waits forever for a read that will not come.
+func TestZeroLengthFrameRejected(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteFrame(&buf, nil); !errors.Is(err, ErrBadFrame) {
+		t.Fatalf("WriteFrame(nil): %v", err)
+	}
+	if err := WriteFrame(&buf, []byte{}); !errors.Is(err, ErrBadFrame) {
+		t.Fatalf("WriteFrame(empty): %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("a rejected frame still wrote %d bytes", buf.Len())
+	}
+
+	// And a zero-length header off the wire is refused rather than returning
+	// an empty payload for a caller to puzzle over.
+	if _, err := ReadFrame(bytes.NewReader([]byte{0, 0, 0, 0})); !errors.Is(err, ErrBadFrame) {
+		t.Fatalf("ReadFrame(zero length): %v", err)
+	}
+
+	// One-byte frames are still fine: the floor is "not empty", not a guess
+	// at the minimum ciphertext size.
+	buf.Reset()
+	if err := WriteFrame(&buf, []byte{0x01}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadFrame(&buf)
+	if err != nil || len(got) != 1 || got[0] != 0x01 {
+		t.Fatalf("one-byte frame round trip: %v %v", got, err)
+	}
+}

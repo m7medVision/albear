@@ -14,6 +14,11 @@ const (
 	LabelSecrets  = "github.com/m7medVision/albear/v1/secrets"
 	LabelAudit    = "github.com/m7medVision/albear/v1/audit"
 	LabelBackup   = "github.com/m7medVision/albear/v1/backup"
+	// LabelCatalog keys the vault-state root. Being a root-key derivative, it
+	// exists only while the vault is unlocked, so an attacker with the
+	// database file but not the password cannot forge a root to match rows
+	// they edited.
+	LabelCatalog = "github.com/m7medVision/albear/v1/catalog"
 )
 
 // DeriveSubkey derives a purpose-bound 32-byte key from the root vault key.

@@ -64,9 +64,15 @@ func TestMigrateIsIdempotentAndChecksummed(t *testing.T) {
 	if err := Migrate(ctx, db); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}
+	// The latest version is whatever is embedded, so adding a migration does
+	// not mean editing this number.
+	want, err := latestMigrationVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
 	v, err := SchemaVersion(ctx, db)
-	if err != nil || v != 1 {
-		t.Fatalf("schema version %d, err %v", v, err)
+	if err != nil || v != want {
+		t.Fatalf("schema version %d, want %d, err %v", v, want, err)
 	}
 
 	// Tampering with the recorded checksum must make migration refuse.
@@ -368,5 +374,51 @@ func TestKeyEnvelopeSwap(t *testing.T) {
 func TestOpenBadPath(t *testing.T) {
 	if _, err := Open(filepath.Join(t.TempDir(), "missing", "sub", "vault.db")); err == nil {
 		t.Fatal("open into missing directory succeeded")
+	}
+}
+
+// latestMigrationVersion reports the highest embedded migration version.
+func latestMigrationVersion() (int64, error) {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return 0, err
+	}
+	var latest int64
+	for _, e := range entries {
+		v, err := migrationVersion(e.Name())
+		if err != nil {
+			return 0, err
+		}
+		if v > latest {
+			latest = v
+		}
+	}
+	return latest, nil
+}
+
+// TestVaultStateMigration: the anchor table must exist and be a singleton, or
+// a second row could hold a root for a catalog nobody is checking.
+func TestVaultStateMigration(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO vault_state (singleton_id, state_counter, state_root, updated_at_ms)
+		 VALUES (1, 1, zeroblob(32), 0)`); err != nil {
+		t.Fatalf("insert state: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO vault_state (singleton_id, state_counter, state_root, updated_at_ms)
+		 VALUES (2, 1, zeroblob(32), 0)`); err == nil {
+		t.Fatal("second vault_state row accepted")
+	}
+	// The root is a fixed-width HMAC.
+	if _, err := db.ExecContext(ctx,
+		`UPDATE vault_state SET state_root = zeroblob(16) WHERE singleton_id = 1`); err == nil {
+		t.Fatal("short state_root accepted")
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE vault_state SET state_counter = -1 WHERE singleton_id = 1`); err == nil {
+		t.Fatal("negative state_counter accepted")
 	}
 }

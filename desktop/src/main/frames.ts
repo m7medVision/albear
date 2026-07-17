@@ -2,7 +2,11 @@
 // internal/infrastructure/transport/noise/frames.go: 4-byte big-endian
 // length followed by the payload, with the same hard size cap.
 
-export const MAX_FRAME_SIZE = 768 * 1024;
+// Must equal MaxFrameSize in frames.go. The desktop app reaches the daemon
+// directly and never crosses native messaging, but the daemon enforces one
+// ceiling for every transport, so a larger value here would only produce
+// frames vaultd rejects.
+export const MAX_FRAME_SIZE = 750 * 1024;
 
 export class FrameError extends Error {
   constructor(message: string) {

@@ -10,13 +10,20 @@ import (
 
 type Querier interface {
 	CountRecords(ctx context.Context) (int64, error)
+	GetActiveEnvelopeDigest(ctx context.Context, envelopeVersion int64) (GetActiveEnvelopeDigestRow, error)
 	GetClient(ctx context.Context, clientID []byte) (Client, error)
 	GetKeyEnvelope(ctx context.Context, envelopeVersion int64) (KeyEnvelope, error)
 	GetRecord(ctx context.Context, recordID []byte) (Record, error)
 	GetVault(ctx context.Context) (Vault, error)
+	GetVaultState(ctx context.Context) (GetVaultStateRow, error)
 	ListClients(ctx context.Context) ([]Client, error)
+	ListClientsForRoot(ctx context.Context) ([]ListClientsForRootRow, error)
 	ListKeyEnvelopeVersions(ctx context.Context) ([]int64, error)
 	ListRecords(ctx context.Context) ([]Record, error)
+	// Vault-state root inputs. Each is ordered by primary key so the serialization
+	// the HMAC covers is canonical: the same catalog must always hash the same,
+	// whatever order SQLite would otherwise return rows in.
+	ListRecordsForRoot(ctx context.Context) ([]ListRecordsForRootRow, error)
 	ListSecurityEvents(ctx context.Context, limit int64) ([]SecurityEvent, error)
 }
 

@@ -111,10 +111,40 @@ func TestPairingPhraseCommitsToKeys(t *testing.T) {
 	}
 }
 
+// TestPairingRejectsAdministrativeKinds: pairing is reachable by any same-user
+// process, so the kinds that map to the administrative capability set must not
+// be requestable there. Administrative access comes from the CLI's
+// peer-credential path instead.
+func TestPairingRejectsAdministrativeKinds(t *testing.T) {
+	cs, _ := newEnv(t)
+	for _, kind := range []domain.ClientKind{domain.KindCLI, domain.KindAdministrativeTool} {
+		p, err := cs.RequestPairing(kind, "evil", staticKey(4))
+		if !errors.Is(err, shared.ErrValidation) {
+			t.Fatalf("kind %v accepted over pairing: %v", kind, err)
+		}
+		if p != nil {
+			t.Fatalf("kind %v produced a pending pairing", kind)
+		}
+	}
+	if n := len(cs.ListPending()); n != 0 {
+		t.Fatalf("%d pending pairings after rejection", n)
+	}
+	// Unknown kinds fail closed too.
+	if _, err := cs.RequestPairing(domain.ClientKind(99), "x", staticKey(5)); !errors.Is(err, shared.ErrValidation) {
+		t.Fatalf("unknown kind accepted: %v", err)
+	}
+	// Browser kinds still pair.
+	for _, kind := range []domain.ClientKind{domain.KindChromeExtension, domain.KindChromeNativeHost} {
+		if _, err := cs.RequestPairing(kind, "browser", staticKey(6)); err != nil {
+			t.Fatalf("kind %v could not pair: %v", kind, err)
+		}
+	}
+}
+
 func TestApproveRequiresUnlockedVault(t *testing.T) {
 	cs, vs := newEnv(t)
 	ctx := context.Background()
-	p, _ := cs.RequestPairing(domain.KindCLI, "cli", staticKey(3))
+	p, _ := cs.RequestPairing(domain.KindChromeExtension, "chrome", staticKey(3))
 	vs.Lock()
 	if err := cs.Approve(ctx, p.ID); !errors.Is(err, shared.ErrVaultLocked) {
 		t.Fatalf("approve while locked: %v", err)
@@ -204,7 +234,7 @@ func TestLookupMissing(t *testing.T) {
 func TestTouchLastSeen(t *testing.T) {
 	cs, _ := newEnv(t)
 	ctx := context.Background()
-	p, _ := cs.RequestPairing(domain.KindCLI, "cli", staticKey(5))
+	p, _ := cs.RequestPairing(domain.KindChromeExtension, "chrome", staticKey(5))
 	cs.Approve(ctx, p.ID)
 	clientID, _, _ := cs.ClaimCredential(p.ID)
 	if err := cs.TouchLastSeen(ctx, clientID); err != nil {
@@ -228,21 +258,21 @@ func TestSessionManager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := m.Validate(s.ID, 5); err != nil || got.ID != s.ID {
+	if got, err := m.Validate(s.ID, 5, true); err != nil || got.ID != s.ID {
 		t.Fatal(err)
 	}
 	// Wrong epoch invalidates immediately and permanently.
-	if _, err := m.Validate(s.ID, 6); !errors.Is(err, shared.ErrAuthorizationDeny) {
+	if _, err := m.Validate(s.ID, 6, true); !errors.Is(err, shared.ErrAuthorizationDeny) {
 		t.Fatal("stale-epoch session validated")
 	}
-	if _, err := m.Validate(s.ID, 5); !errors.Is(err, shared.ErrAuthorizationDeny) {
+	if _, err := m.Validate(s.ID, 5, true); !errors.Is(err, shared.ErrAuthorizationDeny) {
 		t.Fatal("session resurrected after epoch invalidation")
 	}
 
 	// Expiry.
 	s2, _ := m.Issue(shared.ID{2}, domain.CLICapabilities, 5)
 	clk.now = clk.now.Add(DefaultSessionTTL + time.Minute)
-	if _, err := m.Validate(s2.ID, 5); !errors.Is(err, shared.ErrAuthorizationDeny) {
+	if _, err := m.Validate(s2.ID, 5, true); !errors.Is(err, shared.ErrAuthorizationDeny) {
 		t.Fatal("expired session validated")
 	}
 
@@ -252,13 +282,13 @@ func TestSessionManager(t *testing.T) {
 	s4, _ := m.Issue(shared.ID{3}, domain.CLICapabilities, 5)
 	s5, _ := m.Issue(shared.ID{4}, domain.CLICapabilities, 5)
 	m.DropClient(shared.ID{3})
-	if _, err := m.Validate(s3.ID, 5); err == nil {
+	if _, err := m.Validate(s3.ID, 5, true); err == nil {
 		t.Fatal("dropped client session alive")
 	}
-	if _, err := m.Validate(s4.ID, 5); err == nil {
+	if _, err := m.Validate(s4.ID, 5, true); err == nil {
 		t.Fatal("dropped client session alive")
 	}
-	if _, err := m.Validate(s5.ID, 5); err != nil {
+	if _, err := m.Validate(s5.ID, 5, true); err != nil {
 		t.Fatal("unrelated session dropped")
 	}
 	if m.Count() != 1 {
@@ -269,4 +299,50 @@ func TestSessionManager(t *testing.T) {
 		t.Fatal("invalidate all incomplete")
 	}
 	m.Drop(s5.ID) // no-op on missing
+}
+
+func TestSessionLastActivity(t *testing.T) {
+	clk := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	m := NewSessionManager(clk)
+
+	if _, ok := m.LastActivity(); ok {
+		t.Fatal("empty manager reported activity")
+	}
+
+	start := clk.now
+	s, _ := m.Issue(shared.ID{1}, domain.CLICapabilities, 5)
+	if last, ok := m.LastActivity(); !ok || !last.Equal(start) {
+		t.Fatalf("issue did not seed activity: %v %v", last, ok)
+	}
+
+	// A non-activity request must not extend the deadline.
+	clk.now = start.Add(time.Minute)
+	if _, err := m.Validate(s.ID, 5, false); err != nil {
+		t.Fatal(err)
+	}
+	if last, _ := m.LastActivity(); !last.Equal(start) {
+		t.Fatalf("polling extended the idle deadline: %v", last)
+	}
+
+	// A capability-using request does.
+	if _, err := m.Validate(s.ID, 5, true); err != nil {
+		t.Fatal(err)
+	}
+	if last, _ := m.LastActivity(); !last.Equal(clk.now) {
+		t.Fatalf("activity not recorded: %v", last)
+	}
+
+	// The newest session across the set wins.
+	busy := clk.now
+	clk.now = busy.Add(time.Minute)
+	m.Issue(shared.ID{2}, domain.CLICapabilities, 5)
+	if last, _ := m.LastActivity(); !last.Equal(clk.now) {
+		t.Fatalf("max across sessions: %v", last)
+	}
+
+	// Expired sessions do not hold the deadline open.
+	clk.now = clk.now.Add(DefaultSessionTTL + time.Minute)
+	if _, ok := m.LastActivity(); ok {
+		t.Fatal("expired sessions reported activity")
+	}
 }

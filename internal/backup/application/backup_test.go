@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -56,12 +57,20 @@ func TestBackupCreateVerify(t *testing.T) {
 		t.Fatalf("backup mode %v", st.Mode())
 	}
 
-	info, err := bs.Verify(path)
+	info, snapshot, err := bs.Verify(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.SnapshotLen == 0 || info.CreatedAtMs == 0 {
 		t.Fatalf("%+v", info)
+	}
+	// The authenticated buffer is the snapshot itself, and it is what a
+	// restore installs.
+	if uint64(len(snapshot)) != info.SnapshotLen {
+		t.Fatalf("snapshot %d bytes, header says %d", len(snapshot), info.SnapshotLen)
+	}
+	if !bytes.HasPrefix(snapshot, []byte("SQLite format 3")) {
+		t.Fatal("authenticated buffer is not the snapshot")
 	}
 
 	// Keyless format check also passes.
@@ -88,7 +97,7 @@ func TestBackupTamperDetected(t *testing.T) {
 	raw[len(raw)/2] ^= 1
 	os.WriteFile(path, raw, 0o600)
 
-	if _, err := bs.Verify(path); !errors.Is(err, ErrBadContainer) {
+	if _, _, err := bs.Verify(path); !errors.Is(err, ErrBadContainer) {
 		t.Fatalf("tampered backup verified: %v", err)
 	}
 }
@@ -150,9 +159,13 @@ func TestRestoreReplacesDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	_, snapshot, err := bs.Verify(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	newDBPath := filepath.Join(t.TempDir(), "restored.db")
 	verified := false
-	err := Restore(backupPath, newDBPath, func(candidate string) error {
+	err = Restore(snapshot, newDBPath, func(candidate string) error {
 		verified = true
 		db, err := sqlite.Open(candidate)
 		if err != nil {
@@ -192,11 +205,15 @@ func TestRestoreKeepsRecoveryCopy(t *testing.T) {
 	target := filepath.Join(dir, "vault.db")
 	os.WriteFile(target, []byte("old database"), 0o600)
 
-	if err := Restore(backupPath, target, nil); err != nil {
+	_, snapshot, err := bs.Verify(backupPath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	old, err := os.ReadFile(target + ".recovery")
-	if err != nil || string(old) != "old database" {
+	if err := Restore(snapshot, target, nil); err != nil {
+		t.Fatal(err)
+	}
+	old, readErr := os.ReadFile(target + ".recovery")
+	if readErr != nil || string(old) != "old database" {
 		t.Fatal("recovery copy missing")
 	}
 }
@@ -211,7 +228,11 @@ func TestRestoreFailsClosedOnBadVerify(t *testing.T) {
 	target := filepath.Join(dir, "vault.db")
 	os.WriteFile(target, []byte("old database"), 0o600)
 
-	err := Restore(backupPath, target, func(string) error { return errors.New("bad") })
+	_, snapshot, err := bs.Verify(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = Restore(snapshot, target, func(string) error { return errors.New("bad") })
 	if err == nil {
 		t.Fatal("restore proceeded despite failed verification")
 	}
@@ -219,5 +240,99 @@ func TestRestoreFailsClosedOnBadVerify(t *testing.T) {
 	cur, _ := os.ReadFile(target)
 	if string(cur) != "old database" {
 		t.Fatal("original database replaced on failed restore")
+	}
+}
+
+// TestVerifyRejectsWrongVault: a well-formed container from another vault must
+// not restore over this one.
+func TestVerifyRejectsWrongVault(t *testing.T) {
+	bs, _, _ := newEnv(t)
+	other, _, _ := newEnv(t)
+	ctx := context.Background()
+
+	path := filepath.Join(t.TempDir(), "other.abk")
+	if err := other.Create(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+	// The foreign container is structurally fine, so only the key and vault-ID
+	// checks stand between it and the vault.
+	if _, err := VerifyContainerFormat(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := bs.Verify(path); err == nil {
+		t.Fatal("container from a different vault verified")
+	}
+}
+
+// TestRestoreInstallsTheAuthenticatedBytes is the swap-between-reads
+// regression: restore must consume the buffer Verify authenticated, so
+// replacing the file afterwards cannot change what lands in the vault.
+func TestRestoreInstallsTheAuthenticatedBytes(t *testing.T) {
+	bs, _, _ := newEnv(t)
+	ctx := context.Background()
+	backupPath := filepath.Join(t.TempDir(), "b.abk")
+	if err := bs.Create(ctx, backupPath); err != nil {
+		t.Fatal(err)
+	}
+
+	_, snapshot, err := bs.Verify(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticated := append([]byte(nil), snapshot...)
+
+	// The attacker swaps the container for something else at the exact moment
+	// a path-taking restore would re-read it.
+	if err := os.WriteFile(backupPath, []byte("attacker database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(t.TempDir(), "vault.db")
+	if err := Restore(snapshot, target, nil); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(installed, authenticated) {
+		t.Fatal("restore installed bytes other than the authenticated snapshot")
+	}
+	if bytes.Contains(installed, []byte("attacker database")) {
+		t.Fatal("post-verification swap reached the vault")
+	}
+	// What landed is a real database, not a truncated or shifted slice.
+	db, err := sqlite.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := sqlite.NewStore(db).Query().GetVault(ctx); err != nil {
+		t.Fatalf("restored database unusable: %v", err)
+	}
+}
+
+// TestVerifyRejectsBadHMACBeforeReturningBytes: a container that fails
+// authentication must yield no buffer at all, so a careless caller cannot
+// install unverified bytes.
+func TestVerifyRejectsBadHMACBeforeReturningBytes(t *testing.T) {
+	bs, _, _ := newEnv(t)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "b.abk")
+	if err := bs.Create(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := os.ReadFile(path)
+	// Flip a bit inside the snapshot: framing stays valid, the HMAC does not.
+	raw[containerHeaderLen+10] ^= 1
+	os.WriteFile(path, raw, 0o600)
+
+	info, snapshot, err := bs.Verify(path)
+	if !errors.Is(err, ErrBadContainer) {
+		t.Fatalf("tampered snapshot verified: %v", err)
+	}
+	if info != nil || snapshot != nil {
+		t.Fatal("failed verification still handed back a buffer")
 	}
 }

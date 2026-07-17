@@ -51,18 +51,19 @@ func TestOriginStringOmitsDefaultPort(t *testing.T) {
 	}
 }
 
-func TestOriginMatching(t *testing.T) {
+func TestOriginMatchingIsExactByDefault(t *testing.T) {
 	github := mustOrigin(t, "https://github.com")
 
-	// Valid matches (PRD 13.3).
-	for _, raw := range []string{"https://github.com", "https://www.github.com", "https://gist.github.com"} {
-		if !github.Matches(mustOrigin(t, raw)) {
-			t.Fatalf("%s should match github.com", raw)
-		}
+	if !github.Matches(mustOrigin(t, "https://github.com")) {
+		t.Fatal("the same origin must match itself")
 	}
 
-	// Invalid matches: lookalikes, wrong scheme, wrong port.
+	// A shared registrable domain is not a trust boundary: on an apex that
+	// hands out subdomains, a sibling is someone else's site. Nothing but the
+	// exact origin matches unless the stored URL opts in.
 	for _, raw := range []string{
+		"https://www.github.com",
+		"https://gist.github.com",
 		"https://github.com.attacker.example",
 		"https://evilgithub.com",
 		"https://github-login.example",
@@ -70,16 +71,87 @@ func TestOriginMatching(t *testing.T) {
 		"https://github.com:8443",
 	} {
 		if github.Matches(mustOrigin(t, raw)) {
-			t.Fatalf("%s must not match github.com", raw)
+			t.Fatalf("%s must not match github.com by default", raw)
 		}
 	}
 }
 
-func TestOriginMatchingIsSymmetric(t *testing.T) {
-	a := mustOrigin(t, "https://www.github.com")
-	b := mustOrigin(t, "https://github.com")
-	if !a.Matches(b) || !b.Matches(a) {
-		t.Fatal("matching must be symmetric")
+func TestOriginMatchingWithSubdomainOptIn(t *testing.T) {
+	example := mustOrigin(t, "https://example.com")
+
+	// Opting in accepts the host itself and anything under it.
+	for _, raw := range []string{
+		"https://example.com",
+		"https://www.example.com",
+		"https://accounts.example.com",
+		"https://deep.nested.example.com",
+	} {
+		if !example.MatchesWithPolicy(mustOrigin(t, raw), true) {
+			t.Fatalf("%s should match an opted-in example.com", raw)
+		}
+	}
+
+	// It is an opt-in to subdomains, not to anything else. Scheme and port
+	// stay mandatory, and suffix lookalikes stay out.
+	for _, raw := range []string{
+		"http://www.example.com",       // scheme
+		"https://www.example.com:8443", // port
+		"https://evil-example.com",     // not a subdomain, just a suffix
+		"https://example.com.attacker.example",
+		"https://notexample.com",
+	} {
+		if example.MatchesWithPolicy(mustOrigin(t, raw), false) {
+			t.Fatalf("%s matched with the opt-in off", raw)
+		}
+		if example.MatchesWithPolicy(mustOrigin(t, raw), true) {
+			t.Fatalf("%s must not match an opted-in example.com", raw)
+		}
+	}
+}
+
+// TestSubdomainOptInIsAsymmetric: the stored URL is the one the user vouched
+// for. A record for the apex may cover its subdomains; a record for one
+// subdomain must never reach the apex or a sibling — that is the escalation
+// the exact default exists to stop.
+func TestSubdomainOptInIsAsymmetric(t *testing.T) {
+	apex := mustOrigin(t, "https://example.com")
+	sub := mustOrigin(t, "https://accounts.example.com")
+	sibling := mustOrigin(t, "https://evil.example.com")
+
+	if !apex.MatchesWithPolicy(sub, true) {
+		t.Fatal("opted-in apex should cover its subdomain")
+	}
+	if sub.MatchesWithPolicy(apex, true) {
+		t.Fatal("a subdomain record reached the apex")
+	}
+	if sub.MatchesWithPolicy(sibling, true) {
+		t.Fatal("a subdomain record reached a sibling")
+	}
+}
+
+// TestLoginURLCarriesItsOwnPolicy: policy is per URL, so one record can hold
+// an exact URL alongside an opted-in one.
+func TestLoginURLCarriesItsOwnPolicy(t *testing.T) {
+	exact, err := NewLoginURL("https://github.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exact.AllowSubdomains {
+		t.Fatal("NewLoginURL opted into subdomains")
+	}
+	if exact.Matches(mustOrigin(t, "https://www.github.com")) {
+		t.Fatal("a plain login URL matched a subdomain")
+	}
+
+	loose, err := NewLoginURLWithPolicy("https://github.com", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loose.Matches(mustOrigin(t, "https://www.github.com")) {
+		t.Fatal("an opted-in login URL did not match a subdomain")
+	}
+	if loose.Matches(mustOrigin(t, "https://evilgithub.com")) {
+		t.Fatal("an opted-in login URL matched a lookalike")
 	}
 }
 
@@ -102,5 +174,22 @@ func TestNewLoginURL(t *testing.T) {
 	}
 	if _, err := NewLoginURL("not a url at all ::"); err == nil {
 		t.Fatal("invalid URL accepted")
+	}
+}
+
+// TestParseOriginRejectsHostsThatMapToNothing: IDNA maps some code points to
+// nothing, so a host that is non-empty on the way in can be empty on the way
+// out. Found by FuzzParseOrigin. An origin with no host is not an origin, and
+// two of them would compare equal to each other.
+func TestParseOriginRejectsHostsThatMapToNothing(t *testing.T) {
+	for _, raw := range []string{
+		"http://­",   // soft hyphen, alone
+		"https://­",  //
+		"https://​",  // zero-width space
+		"https://­­", //
+	} {
+		if o, err := ParseOrigin(raw); err == nil {
+			t.Fatalf("ParseOrigin(%q) accepted, giving host %q", raw, o.Host)
+		}
 	}
 }

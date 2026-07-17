@@ -14,6 +14,7 @@ import (
 	recdomain "github.com/m7medVision/albear/internal/records/domain"
 	secdomain "github.com/m7medVision/albear/internal/security/domain"
 	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultdomain "github.com/m7medVision/albear/internal/vault/domain"
 )
 
 // connState is the per-connection authorization context.
@@ -64,6 +65,22 @@ var pairingOps = map[string]bool{
 	"vault.status":   true,
 }
 
+// idleExemptOps do not extend the auto-lock deadline. Status is polled on a
+// timer by the desktop app and the popup; letting it count as activity would
+// keep an unattended vault unlocked forever.
+var idleExemptOps = map[string]bool{"vault.status": true}
+
+// lockedStateOps may still mint a session on an already-authenticated
+// connection while the vault is locked. Every other operation is denied there
+// (sessions die on lock), but locking wipes all sessions and unlock itself is
+// an authorized operation, so without this exemption a client holding a live
+// connection could never unlock again without re-handshaking. Neither op
+// exposes a secret and unlock still requires the master password.
+var lockedStateOps = map[string]bool{
+	"vault.status": true,
+	"vault.unlock": true,
+}
+
 // Handle dispatches one decrypted request envelope and returns the response
 // envelope. It never returns internal error text to the client.
 func (s *Server) Handle(ctx context.Context, st *connState, raw []byte) *protocol.Response {
@@ -85,7 +102,7 @@ func (s *Server) Handle(ctx context.Context, st *connState, raw []byte) *protoco
 		if !ok {
 			return protocol.ErrResponse(req.RequestID, shared.ErrValidation)
 		}
-		if err := s.authorize(st, cap); err != nil {
+		if err := s.authorize(ctx, st, req.Operation, cap); err != nil {
 			s.recorder.Record(ctx, secdomain.SeverityWarning, secdomain.EventUnauthorizedRequest, "")
 			return protocol.ErrResponse(req.RequestID, err)
 		}
@@ -103,21 +120,32 @@ func (s *Server) Handle(ctx context.Context, st *connState, raw []byte) *protoco
 }
 
 // authorize validates the connection's session against the current epoch,
-// reissuing over the already-authenticated channel when the epoch moved
-// (the cryptographic identity did not change; revoked clients are dropped).
-func (s *Server) authorize(st *connState, cap accessdomain.Capability) error {
+// reissuing over the already-authenticated channel when the epoch moved (the
+// cryptographic identity did not change; revoked clients are dropped).
+//
+// Sessions die on lock: while the vault is locked no replacement session is
+// minted except for lockedStateOps, so a connection that was live across a
+// lock cannot carry its privileges into the next unlocked period.
+func (s *Server) authorize(ctx context.Context, st *connState, op string, cap accessdomain.Capability) error {
 	epoch := s.vault.Epoch()
 	if st.session == nil {
 		return shared.ErrAuthorizationDeny
 	}
-	if _, err := s.sessions.Validate(st.session.ID, epoch); err != nil {
+	if _, err := s.sessions.Validate(st.session.ID, epoch, !idleExemptOps[op]); err != nil {
+		if !s.vault.IsUnlocked() && !lockedStateOps[op] {
+			return shared.ErrAuthorizationDeny
+		}
+		caps := st.session.Capabilities
 		if !st.clientID.IsZero() {
-			client, lookupErr := s.access.Lookup(context.Background(), st.clientID)
+			client, lookupErr := s.access.Lookup(ctx, st.clientID)
 			if lookupErr != nil || !client.IsApproved() {
 				return shared.ErrAuthorizationDeny
 			}
+			// Re-read from the row rather than trusting the handshake-era
+			// copy, so a capability reduction applies without a reconnect.
+			caps = client.Capabilities
 		}
-		fresh, issueErr := s.sessions.Issue(st.clientID, st.session.Capabilities, epoch)
+		fresh, issueErr := s.sessions.Issue(st.clientID, caps, epoch)
 		if issueErr != nil {
 			return shared.ErrAuthorizationDeny
 		}
@@ -157,10 +185,14 @@ func (s *Server) dispatch(ctx context.Context, st *connState, op string, payload
 		return s.opChangePassword(ctx, payload)
 	case "vault.destroy":
 		return s.opDestroy(ctx, payload)
-	case "records.create", "records.createLogin":
-		return s.opCreate(ctx, payload)
-	case "records.update", "records.updateLogin":
-		return s.opUpdate(ctx, payload)
+	case "records.create":
+		return s.opCreate(ctx, payload, false)
+	case "records.createLogin":
+		return s.opCreate(ctx, payload, true)
+	case "records.update":
+		return s.opUpdate(ctx, payload, false)
+	case "records.updateLogin":
+		return s.opUpdate(ctx, payload, true)
 	case "records.delete":
 		return s.opDelete(ctx, payload)
 	case "records.list":
@@ -247,8 +279,8 @@ func (s *Server) opInit(ctx context.Context, payload json.RawMessage) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	if len(p.Password) < 8 {
-		return nil, shared.ErrValidation
+	if err := vaultdomain.CheckPasswordStrength(p.Password); err != nil {
+		return nil, err
 	}
 	if err := s.vault.Init(ctx, []byte(p.Password), s.kdfParams); err != nil {
 		return nil, err
@@ -272,6 +304,20 @@ func (s *Server) opUnlock(ctx context.Context, st *connState, payload json.RawMe
 		s.recorder.Record(ctx, secdomain.SeverityCritical, secdomain.EventIntegrityFailure, "")
 		return nil, err
 	}
+	// Every payload is authenticated on its own, but only this notices rows
+	// that were removed, reverted, or rolled back wholesale. Same response as
+	// an index failure: lock and record, never destroy (invariant 7).
+	bootstrapped, err := s.vault.VerifyCatalog(ctx)
+	if err != nil {
+		s.vault.PanicLock()
+		s.recorder.Record(ctx, secdomain.SeverityCritical, secdomain.EventIntegrityFailure, "")
+		return nil, err
+	}
+	if bootstrapped {
+		// A vault predating the state table: this unlock defined the baseline.
+		s.log.Info("vault state root established on first unlock", "category", "vault")
+		s.recorder.Record(ctx, secdomain.SeverityInfo, secdomain.EventVaultStateBootstrapped, "")
+	}
 	// Reissue this connection's session at the new epoch (PRD 15.2 step 12).
 	if st.session != nil {
 		fresh, err := s.sessions.Issue(st.clientID, st.session.Capabilities, s.vault.Epoch())
@@ -288,8 +334,8 @@ func (s *Server) opChangePassword(ctx context.Context, payload json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
-	if len(p.Next) < 8 {
-		return nil, shared.ErrValidation
+	if err := vaultdomain.CheckPasswordStrength(p.Next); err != nil {
+		return nil, err
 	}
 	if err := s.vault.ChangeMasterPassword(ctx, []byte(p.Current), []byte(p.Next), s.kdfParams); err != nil {
 		return nil, err
@@ -313,13 +359,17 @@ func (s *Server) opDestroy(ctx context.Context, payload json.RawMessage) (any, e
 	return struct{}{}, nil
 }
 
-func (s *Server) opCreate(ctx context.Context, payload json.RawMessage) (any, error) {
+// opCreate creates a record. loginOnly marks the browser-facing
+// records.createLogin capability, whose grant covers logins and nothing else:
+// the client-supplied type is overridden rather than trusted, so the narrow
+// capability cannot mint a note or an api record.
+func (s *Server) opCreate(ctx context.Context, payload json.RawMessage, loginOnly bool) (any, error) {
 	p, err := decode[recordFields](payload)
 	if err != nil {
 		return nil, err
 	}
 	t := recdomain.RecordType(p.Type)
-	if p.Type == "" {
+	if p.Type == "" || loginOnly {
 		t = recdomain.TypeLogin
 	}
 	meta, secret, err := fieldsToDomain(p)
@@ -333,7 +383,11 @@ func (s *Server) opCreate(ctx context.Context, payload json.RawMessage) (any, er
 	return map[string]string{"id": id.String()}, nil
 }
 
-func (s *Server) opUpdate(ctx context.Context, payload json.RawMessage) (any, error) {
+// opUpdate edits a record. loginOnly marks records.updateLogin, which must not
+// reach a note or an api record: the stored type is read daemon-side rather
+// than taken from the request, since Update preserves it and the client could
+// otherwise overwrite any record it can name.
+func (s *Server) opUpdate(ctx context.Context, payload json.RawMessage, loginOnly bool) (any, error) {
 	p, err := decode[updatePayload](payload)
 	if err != nil {
 		return nil, err
@@ -341,6 +395,15 @@ func (s *Server) opUpdate(ctx context.Context, payload json.RawMessage) (any, er
 	id, err := shared.IDFromString(p.ID)
 	if err != nil {
 		return nil, shared.ErrValidation
+	}
+	if loginOnly {
+		entry, err := s.records.Show(id)
+		if err != nil {
+			return nil, err
+		}
+		if entry.Type != recdomain.TypeLogin {
+			return nil, shared.ErrAuthorizationDeny
+		}
 	}
 	meta, secret, err := fieldsToDomain(p.recordFields)
 	if err != nil {
@@ -493,17 +556,29 @@ func (s *Server) opCancel(payload json.RawMessage) (any, error) {
 	return struct{}{}, nil
 }
 
+// opPending lists pairing requests. It reports the requested kind by name and
+// the concrete capabilities approval would grant, so the operator consents to
+// the actual privilege rather than to a label and a phrase.
 func (s *Server) opPending() (any, error) {
 	pending := s.access.ListPending()
 	type view struct {
-		PairingID string `json:"pairingId"`
-		Kind      int    `json:"kind"`
-		Label     string `json:"label"`
-		Phrase    string `json:"phrase"`
+		PairingID    string   `json:"pairingId"`
+		Kind         int      `json:"kind"`
+		KindName     string   `json:"kindName"`
+		Label        string   `json:"label"`
+		Phrase       string   `json:"phrase"`
+		Capabilities []string `json:"capabilities"`
 	}
 	out := make([]view, 0, len(pending))
 	for _, p := range pending {
-		out = append(out, view{p.ID.String(), int(p.Kind), p.Label, p.Phrase})
+		out = append(out, view{
+			PairingID:    p.ID.String(),
+			Kind:         int(p.Kind),
+			KindName:     p.Kind.String(),
+			Label:        p.Label,
+			Phrase:       p.Phrase,
+			Capabilities: accessdomain.DefaultCapabilities(p.Kind).Names(),
+		})
 	}
 	return map[string]any{"pending": out}, nil
 }
@@ -581,7 +656,7 @@ func (s *Server) opBackupVerify(payload json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := s.backup.Verify(p.Path)
+	info, _, err := s.backup.Verify(p.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -597,10 +672,14 @@ func (s *Server) opBackupRestore(ctx context.Context, payload json.RawMessage) (
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.backup.Verify(p.Path); err != nil {
+	// Authenticate once and install exactly those bytes: the container is read
+	// here and never again, so it cannot be swapped after the HMAC check.
+	// Verify needs the backup key, so it must run before restoreVault locks.
+	_, snapshot, err := s.backup.Verify(p.Path)
+	if err != nil {
 		return nil, err
 	}
-	if err := s.restoreVault(p.Path); err != nil {
+	if err := s.restoreVault(snapshot); err != nil {
 		return nil, err
 	}
 	s.recorder.Record(ctx, secdomain.SeverityInfo, secdomain.EventBackupRestored, "")

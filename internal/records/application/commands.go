@@ -2,7 +2,9 @@ package application
 
 import (
 	"context"
+	"database/sql"
 
+	"github.com/m7medVision/albear/internal/catalog"
 	"github.com/m7medVision/albear/internal/infrastructure/crypto"
 	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
 	domain "github.com/m7medVision/albear/internal/records/domain"
@@ -40,17 +42,24 @@ func (s *Service) Create(ctx context.Context, t domain.RecordType, meta domain.R
 		return shared.ID{}, err
 	}
 
-	err = s.store.Command(ctx, func(c *command.Queries) error {
-		return c.InsertRecord(ctx, command.InsertRecordParams{
+	var stamped int64
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
+		if err := c.InsertRecord(ctx, command.InsertRecordParams{
 			RecordID: idBytes, KeyVersion: int64(keyVersion), Revision: 1,
 			MetadataNonce: metaNonce, MetadataCiphertext: metaCT,
 			SecretNonce: secNonce, SecretCiphertext: secCT,
 			PayloadVersion: PayloadVersion,
-		})
+		}); err != nil {
+			return err
+		}
+		var err error
+		stamped, err = s.stamp(ctx, tx, kr)
+		return err
 	})
 	if err != nil {
 		return shared.ID{}, err
 	}
+	s.noteStamped(stamped)
 
 	s.index.Put(&IndexEntry{ID: id, Type: t, Revision: 1, Metadata: meta})
 	return id, nil
@@ -81,8 +90,8 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 		return err
 	}
 
-	var rows int64
-	err = s.store.Command(ctx, func(c *command.Queries) error {
+	var rows, stamped int64
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		var err error
 		rows, err = c.UpdateRecord(ctx, command.UpdateRecordParams{
 			Revision:      int64(newRevision),
@@ -91,6 +100,15 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 			PayloadVersion: PayloadVersion,
 			RecordID:       id.Bytes(), Revision_2: int64(expectedRevision),
 		})
+		if err != nil {
+			return err
+		}
+		// A revision conflict changed nothing, so there is nothing to
+		// re-stamp; stamping anyway would burn a counter on a no-op.
+		if rows == 0 {
+			return nil
+		}
+		stamped, err = s.stamp(ctx, tx, kr)
 		return err
 	})
 	if err != nil {
@@ -99,6 +117,7 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 	if rows == 0 {
 		return shared.ErrRevisionConflict
 	}
+	s.noteStamped(stamped)
 
 	s.index.Put(&IndexEntry{ID: id, Type: entry.Type, Revision: newRevision, Metadata: meta})
 	return nil
@@ -106,13 +125,21 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 
 // Delete removes a record and its index entry.
 func (s *Service) Delete(ctx context.Context, id shared.ID) error {
-	if _, err := s.keys.Keys(); err != nil {
+	kr, err := s.keys.Keys()
+	if err != nil {
 		return err
 	}
-	var rows int64
-	err := s.store.Command(ctx, func(c *command.Queries) error {
+	var rows, stamped int64
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		var err error
 		rows, err = c.DeleteRecord(ctx, id.Bytes())
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return nil
+		}
+		stamped, err = s.stamp(ctx, tx, kr)
 		return err
 	})
 	if err != nil {
@@ -121,8 +148,32 @@ func (s *Service) Delete(ctx context.Context, id shared.ID) error {
 	if rows == 0 {
 		return shared.ErrRecordNotFound
 	}
+	s.noteStamped(stamped)
 	s.index.Remove(id)
 	return nil
+}
+
+// stamp re-anchors the vault state inside the caller's transaction, returning
+// the counter it wrote. Deletion is the case that makes this necessary: a
+// removed row leaves every surviving ciphertext valid, so only a hash over the
+// whole set notices it is gone.
+//
+// The counter goes to the vault's high-water mark via noteStamped, once the
+// caller's transaction has committed.
+func (s *Service) stamp(ctx context.Context, tx *sql.Tx, kr *KeyringRef) (int64, error) {
+	vaultID, _, keyVersion, err := s.keys.VaultInfo()
+	if err != nil {
+		return 0, err
+	}
+	return catalog.Stamp(ctx, tx, kr.Catalog, vaultID, keyVersion, s.clock.Now())
+}
+
+// noteStamped records a committed counter. Call it only after the transaction
+// that wrote it succeeded.
+func (s *Service) noteStamped(counter int64) {
+	if counter > 0 {
+		s.keys.NoteCatalogCounter(counter)
+	}
 }
 
 // encryptRecord serializes and encrypts both halves with independent fresh

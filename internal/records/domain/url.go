@@ -40,6 +40,13 @@ func ParseOrigin(raw string) (CanonicalOrigin, error) {
 	if err != nil {
 		return CanonicalOrigin{}, shared.ErrValidation
 	}
+	// Re-check emptiness after mapping, not just before it. IDNA maps some
+	// code points to nothing at all — "http://­" (a lone soft hyphen) has
+	// a non-empty host going in and an empty one coming out — and an origin
+	// with no host would compare equal to any other host-less origin.
+	if ascii == "" {
+		return CanonicalOrigin{}, shared.ErrValidation
+	}
 	port := u.Port()
 	if port == "" {
 		if scheme == "https" {
@@ -73,23 +80,36 @@ func (o CanonicalOrigin) RegistrableDomain() string {
 	return d
 }
 
-// Matches implements the subdomain policy: two origins match when their
-// schemes and effective ports are equal and they share a registrable domain.
-// This accepts github.com ↔ www.github.com and rejects lookalikes such as
-// github.com.attacker.example (registrable domain attacker.example).
+// Matches is exact equality of scheme, punycode host, and effective port.
+//
+// This is the default because a shared registrable domain is not a trust
+// boundary. On an apex that hands subdomains to strangers — github.io,
+// the big cloud app domains, most universities — "shares an eTLD+1" means
+// "someone else's site", and matching there would offer a credential for
+// accounts.example.com to evil.example.com. A record opts into the looser
+// rule per URL; see MatchesWithPolicy.
 func (o CanonicalOrigin) Matches(other CanonicalOrigin) bool {
+	return o.Scheme == other.Scheme && o.Host == other.Host && o.Port == other.Port
+}
+
+// MatchesWithPolicy is Matches, plus at-or-under-host matching when the stored
+// URL opted in. Scheme and effective port stay mandatory either way: opting
+// into subdomains is not opting into http, or into a different port.
+//
+// The relation is deliberately asymmetric. The receiver is the *stored* URL —
+// the one the user vouched for — and other is the page asking. A record for
+// example.com with the flag set matches www.example.com, but a record for
+// www.example.com never matches example.com, let alone a sibling.
+func (o CanonicalOrigin) MatchesWithPolicy(other CanonicalOrigin, allowSubdomains bool) bool {
+	if !allowSubdomains {
+		return o.Matches(other)
+	}
 	if o.Scheme != other.Scheme || o.Port != other.Port {
 		return false
 	}
-	if o.Host == other.Host {
-		return true
-	}
-	ra, rb := o.RegistrableDomain(), other.RegistrableDomain()
-	if ra == "" || rb == "" || ra != rb {
-		return false
-	}
-	// Both hosts must actually sit under the shared registrable domain.
-	return isUnder(o.Host, ra) && isUnder(other.Host, rb)
+	// isUnder is suffix matching against a dot-delimited boundary, so
+	// "evil-example.com" and "example.com.attacker.example" do not qualify.
+	return isUnder(other.Host, o.Host)
 }
 
 func isUnder(host, apex string) bool {
@@ -100,6 +120,11 @@ func isUnder(host, apex string) bool {
 type LoginURL struct {
 	Raw    string
 	Origin CanonicalOrigin
+	// AllowSubdomains widens matching for this URL to hosts at or under
+	// Origin.Host. It is off unless the user turned it on, and it lives in the
+	// encrypted metadata blob rather than a plaintext column, so the set of
+	// sites with relaxed matching is not readable from the database file.
+	AllowSubdomains bool
 }
 
 func NewLoginURL(raw string) (LoginURL, error) {
@@ -108,4 +133,20 @@ func NewLoginURL(raw string) (LoginURL, error) {
 		return LoginURL{}, err
 	}
 	return LoginURL{Raw: raw, Origin: o}, nil
+}
+
+// NewLoginURLWithPolicy builds a URL that also matches hosts under its own.
+func NewLoginURLWithPolicy(raw string, allowSubdomains bool) (LoginURL, error) {
+	u, err := NewLoginURL(raw)
+	if err != nil {
+		return LoginURL{}, err
+	}
+	u.AllowSubdomains = allowSubdomains
+	return u, nil
+}
+
+// Matches reports whether the page origin is covered by this stored URL under
+// its own policy.
+func (u LoginURL) Matches(page CanonicalOrigin) bool {
+	return u.Origin.MatchesWithPolicy(page, u.AllowSubdomains)
 }

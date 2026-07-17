@@ -65,6 +65,18 @@ function makeButton(text: string, variant: 'primary' | 'secondary'): HTMLButtonE
   return b
 }
 
+// Only genuine user input may drive the bar. Every control here either stores
+// a credential or overwrites an existing one, so a synthetic click — which any
+// page can dispatch at an element it can reach, and which `el.click()` also
+// produces — must do nothing. The closed shadow root should already keep these
+// buttons out of a page's reach; this is the second lock on the same door.
+function onUserClick(el: HTMLElement, fn: () => void): void {
+  el.addEventListener('click', (event: MouseEvent) => {
+    if (!event.isTrusted) return
+    fn()
+  })
+}
+
 function makeStatus(): HTMLSpanElement {
   const s = document.createElement('span')
   s.style.cssText = `font-size:11px;color:${T.destructive};margin-left:auto;min-height:14px`
@@ -77,7 +89,12 @@ function makeLabel(): HTMLSpanElement {
   return s
 }
 
-function renderUpdate(opts: RenderOpts, bar: HTMLDivElement, status: HTMLSpanElement): void {
+function renderUpdate(
+  opts: RenderOpts,
+  bar: HTMLDivElement,
+  status: HTMLSpanElement,
+  destroy: () => void,
+): void {
   const ex = opts.existing!
   const label = makeLabel()
   const name = document.createElement('strong')
@@ -100,7 +117,7 @@ function renderUpdate(opts: RenderOpts, bar: HTMLDivElement, status: HTMLSpanEle
     status.textContent = ''
     try {
       await cb()
-      bar.remove()
+      destroy()
     } catch (e) {
       status.textContent = e instanceof Error ? e.message : String(e)
       update.disabled = false
@@ -109,18 +126,21 @@ function renderUpdate(opts: RenderOpts, bar: HTMLDivElement, status: HTMLSpanEle
     }
   }
 
-  update.addEventListener('click', () => {
+  onUserClick(update, () => {
     void run(() => opts.callbacks.onUpdate(ex, opts.candidate))
   })
-  saveNew.addEventListener('click', () => {
+  onUserClick(saveNew, () => {
     void run(() => opts.callbacks.onSaveNew(opts.candidate))
   })
-  dismiss.addEventListener('click', () => {
-    bar.remove()
-  })
+  onUserClick(dismiss, destroy)
 }
 
-function renderSave(opts: RenderOpts, bar: HTMLDivElement, status: HTMLSpanElement): void {
+function renderSave(
+  opts: RenderOpts,
+  bar: HTMLDivElement,
+  status: HTMLSpanElement,
+  destroy: () => void,
+): void {
   const label = makeLabel()
   const prompt = document.createElement('span')
   prompt.textContent = opts.candidate.username
@@ -139,7 +159,7 @@ function renderSave(opts: RenderOpts, bar: HTMLDivElement, status: HTMLSpanEleme
     status.textContent = ''
     try {
       await cb()
-      bar.remove()
+      destroy()
     } catch (e) {
       status.textContent = e instanceof Error ? e.message : String(e)
       save.disabled = false
@@ -147,19 +167,30 @@ function renderSave(opts: RenderOpts, bar: HTMLDivElement, status: HTMLSpanEleme
     }
   }
 
-  save.addEventListener('click', () => {
+  onUserClick(save, () => {
     void run(() => opts.callbacks.onSave(opts.candidate))
   })
-  dismiss.addEventListener('click', () => {
-    bar.remove()
-  })
+  onUserClick(dismiss, destroy)
 }
 
 export function renderSaveBar(opts: RenderOpts): SaveBar {
   document.getElementById(BAR_ID)?.remove()
 
+  // The host is a bare anchor in the page; everything real lives in a closed
+  // shadow root hanging off it. Closed rather than open, because with an open
+  // root the page walks host.shadowRoot straight to our controls: it could
+  // read the candidate username out of the DOM, or drive the buttons. Closed
+  // leaves host.shadowRoot null for page script.
+  //
+  // `all:initial` is the other half of the isolation: it stops host-page CSS
+  // from reaching the host and hiding or repositioning the bar under
+  // something else.
+  const host = document.createElement('div')
+  host.id = BAR_ID
+  host.style.cssText = 'all:initial'
+  const root = host.attachShadow({ mode: 'closed' })
+
   const bar = document.createElement('div')
-  bar.id = BAR_ID
   bar.setAttribute('role', 'alertdialog')
   bar.setAttribute('aria-label', 'Save login to albear')
   bar.style.cssText =
@@ -170,24 +201,26 @@ export function renderSaveBar(opts: RenderOpts): SaveBar {
     `display:flex;gap:10px;align-items:center;max-width:360px;padding:10px 14px`
 
   const status = makeStatus()
+  // Removing the host takes the shadow root and the bar with it; removing the
+  // bar alone would leave an orphaned host in the page.
+  const destroy = (): void => host.remove()
 
   if (opts.mode === 'update' && opts.existing) {
-    renderUpdate(opts, bar, status)
+    renderUpdate(opts, bar, status, destroy)
   } else {
-    renderSave(opts, bar, status)
+    renderSave(opts, bar, status, destroy)
   }
 
   bar.append(status)
-  document.documentElement.appendChild(bar)
+  root.appendChild(bar)
+  document.documentElement.appendChild(host)
 
   return {
     el: bar,
     setStatus(text) {
       status.textContent = text
     },
-    remove() {
-      bar.remove()
-    },
+    remove: destroy,
   }
 }
 

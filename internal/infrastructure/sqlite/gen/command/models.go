@@ -66,3 +66,10 @@ type Vault struct {
 	CreatedAtMs           int64
 	UpdatedAtMs           int64
 }
+
+type VaultState struct {
+	SingletonID  int64
+	StateCounter int64
+	StateRoot    []byte
+	UpdatedAtMs  int64
+}

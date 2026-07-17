@@ -85,13 +85,43 @@ func TestValidateNote(t *testing.T) {
 
 func TestMatchesOrigin(t *testing.T) {
 	r := validLogin(t)
-	page, _ := ParseOrigin("https://www.github.com/login")
-	if !r.MatchesOrigin(page) {
-		t.Fatal("www subdomain should match")
+	exact, _ := ParseOrigin("https://github.com/login")
+	if !r.MatchesOrigin(exact) {
+		t.Fatal("the record's own origin should match")
+	}
+	// Exact by default: a subdomain is a different site until the record says
+	// otherwise.
+	sub, _ := ParseOrigin("https://www.github.com/login")
+	if r.MatchesOrigin(sub) {
+		t.Fatal("www subdomain matched without the opt-in")
 	}
 	evil, _ := ParseOrigin("https://github.com.attacker.example")
 	if r.MatchesOrigin(evil) {
 		t.Fatal("lookalike matched")
+	}
+}
+
+// TestMatchesOriginPerURLPolicy: policy is a property of each stored URL, so a
+// record can be exact about one site and permissive about another.
+func TestMatchesOriginPerURLPolicy(t *testing.T) {
+	strict, err := NewLoginURL("https://github.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loose, err := NewLoginURLWithPolicy("https://example.com", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := validLogin(t)
+	r.Metadata.URLs = []LoginURL{strict, loose}
+
+	sub, _ := ParseOrigin("https://www.example.com")
+	if !r.MatchesOrigin(sub) {
+		t.Fatal("the opted-in URL did not match its subdomain")
+	}
+	ghSub, _ := ParseOrigin("https://www.github.com")
+	if r.MatchesOrigin(ghSub) {
+		t.Fatal("the opt-in on one URL leaked to another")
 	}
 }
 

@@ -11,15 +11,23 @@ func FuzzParseContainer(f *testing.F) {
 	f.Add([]byte{})
 	f.Add(make([]byte, 200))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		info, body, tag, err := parseContainer(data)
+		c, err := parseContainer(data)
 		if err != nil {
 			return
 		}
-		if uint64(len(body))+uint64(len(tag)) != uint64(len(data)) {
+		if uint64(len(c.body))+uint64(len(c.tag)) != uint64(len(data)) {
 			t.Fatal("accepted container with inconsistent framing")
 		}
-		if info.SnapshotLen > uint64(len(data)) {
+		if c.info.SnapshotLen > uint64(len(data)) {
 			t.Fatal("accepted snapshot length larger than input")
+		}
+		// The snapshot must sit inside the bytes the HMAC covers: anything
+		// outside body is unauthenticated, and restore installs this slice.
+		if uint64(len(c.snapshot)) != c.info.SnapshotLen {
+			t.Fatal("snapshot length disagrees with the header")
+		}
+		if len(c.body) != containerHeaderLen+len(c.snapshot) {
+			t.Fatal("snapshot is not wholly inside the authenticated body")
 		}
 	})
 }
