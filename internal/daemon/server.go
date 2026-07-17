@@ -239,7 +239,9 @@ func (s *Server) buildConnState(ctx context.Context, hello *transport.Hello, rem
 }
 
 // restoreVault swaps the database for a verified backup snapshot (PRD 22.2).
-func (s *Server) restoreVault(backupPath string) error {
+// It takes the snapshot bytes the caller already authenticated, never a path:
+// re-reading the container here would let it be swapped after the check.
+func (s *Server) restoreVault(snapshot []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -247,7 +249,7 @@ func (s *Server) restoreVault(backupPath string) error {
 	if err := s.store.Close(); err != nil {
 		return err
 	}
-	err := backupapp.Restore(backupPath, s.dbPath, func(candidate string) error {
+	err := backupapp.Restore(snapshot, s.dbPath, func(candidate string) error {
 		db, err := sqlite.Open(candidate)
 		if err != nil {
 			return err
@@ -285,8 +287,18 @@ func (s *Server) destroyVault() error {
 	if err := s.store.Close(); err != nil {
 		return err
 	}
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		os.Remove(s.dbPath + suffix)
+	// Every copy, including the .recovery snapshot a previous restore left
+	// behind — it is a complete vault, and reporting success while it survives
+	// would be a lie. An already-absent file is a success, anything else is
+	// surfaced rather than swallowed.
+	var removeErrs []error
+	for _, suffix := range []string{"", "-wal", "-shm", ".recovery"} {
+		if err := os.Remove(s.dbPath + suffix); err != nil && !os.IsNotExist(err) {
+			removeErrs = append(removeErrs, err)
+		}
+	}
+	if len(removeErrs) > 0 {
+		return errors.Join(removeErrs...)
 	}
 	// Reopen a fresh, empty database so the daemon keeps serving (status now
 	// reports uninitialized) instead of crashing on later requests.

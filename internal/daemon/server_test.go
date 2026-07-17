@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -926,6 +927,64 @@ func TestDestroyRequiresPassword(t *testing.T) {
 	}
 	if status.Initialized {
 		t.Fatal("vault survived destroy")
+	}
+}
+
+// TestDestroyRemovesEveryCopy: a .recovery file left by an earlier restore is
+// a complete, openable vault. Destroy that leaves it behind reports success
+// while the secrets are still on disk.
+func TestDestroyRemovesEveryCopy(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+
+	// Stand in for what a previous restore leaves behind. The live -wal/-shm
+	// are not staged here: they belong to the open database, and writing to
+	// them would corrupt it rather than test anything.
+	recovery := d.dbPath + ".recovery"
+	if err := os.WriteFile(recovery, []byte("previous vault"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Call("vault.destroy", map[string]string{"password": "master password"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(recovery); !os.IsNotExist(err) {
+		t.Fatalf("destroy left the .recovery copy on disk: %v", err)
+	}
+}
+
+// TestDestroySurfacesDeletionFailure: reporting success while a copy of the
+// vault survives is worse than reporting the failure.
+func TestDestroySurfacesDeletionFailure(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+	initAndUnlock(t, c)
+
+	// Make the .recovery file undeletable by removing write permission on its
+	// directory: unlink needs write on the parent, not the file.
+	recovery := d.dbPath + ".recovery"
+	if err := os.WriteFile(recovery, []byte("previous vault"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(d.dbPath)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+
+	// root ignores directory permissions, so this can only be asserted as a
+	// non-root user.
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permissions do not block unlink")
+	}
+
+	err := d.server.destroyVault()
+	if err == nil {
+		t.Fatal("destroy reported success while a vault copy survived")
+	}
+	if _, statErr := os.Stat(recovery); statErr != nil {
+		t.Fatal("test did not actually block deletion")
 	}
 }
 

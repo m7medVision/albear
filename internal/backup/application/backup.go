@@ -99,52 +99,51 @@ type Info struct {
 }
 
 // Verify authenticates a container against the current vault's backup key
-// without touching the live database (PRD 22.2).
-func (s *Service) Verify(path string) (*Info, error) {
+// without touching the live database (PRD 22.2). It returns the snapshot bytes
+// the HMAC actually covered.
+//
+// Returning the buffer is what makes restore safe: the caller installs these
+// bytes rather than re-reading the path, so there is no window in which the
+// file on disk can be swapped between the check and the install.
+func (s *Service) Verify(path string) (*Info, []byte, error) {
 	kr, err := s.keys.Keys()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	info, body, tag, err := parseContainer(raw)
+	c, err := parseContainer(raw)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mac := hmac.New(sha256.New, kr.Backup)
-	mac.Write(body)
-	if !hmac.Equal(mac.Sum(nil), tag) {
-		return nil, ErrBadContainer
+	mac.Write(c.body)
+	if !hmac.Equal(mac.Sum(nil), c.tag) {
+		return nil, nil, ErrBadContainer
 	}
 	vaultID, _, _, err := s.keys.VaultInfo()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if !bytes.Equal(info.VaultID.Bytes(), vaultID) {
-		return nil, ErrWrongVault
+	if !bytes.Equal(c.info.VaultID.Bytes(), vaultID) {
+		return nil, nil, ErrWrongVault
 	}
-	return info, nil
+	return c.info, c.snapshot, nil
 }
 
-// Restore verifies the container and atomically replaces the vault database.
+// Restore atomically installs an authenticated snapshot as the vault database.
 // The caller (daemon) must have closed the database first and re-opens after.
 // The previous database is kept at dbPath+".recovery" until the restored file
 // is verified openable (PRD 22.2).
-func Restore(backupPath, dbPath string, verify func(candidate string) error) error {
-	raw, err := os.ReadFile(backupPath)
-	if err != nil {
-		return err
-	}
-	_, _, _, err = parseContainer(raw)
-	if err != nil {
-		return err
-	}
-	snap := raw[44 : len(raw)-sha256.Size]
-
+//
+// It takes the snapshot bytes rather than a path deliberately: these must be
+// the bytes Verify authenticated. Handing this function a path would reopen
+// the swap-between-reads window that returning the buffer closes.
+func Restore(snapshot []byte, dbPath string, verify func(candidate string) error) error {
 	candidate := dbPath + ".restore.tmp"
-	if err := os.WriteFile(candidate, snap, 0o600); err != nil {
+	if err := os.WriteFile(candidate, snapshot, 0o600); err != nil {
 		return err
 	}
 	defer os.Remove(candidate)
@@ -179,36 +178,56 @@ func VerifyContainerFormat(path string) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, _, _, err := parseContainer(raw)
-	return info, err
+	c, err := parseContainer(raw)
+	if err != nil {
+		return nil, err
+	}
+	return c.info, nil
 }
 
-func parseContainer(raw []byte) (*Info, []byte, []byte, error) {
-	const headerLen = 8 + 4 + 16 + 8 + 8
-	if len(raw) < headerLen+sha256.Size || !bytes.Equal(raw[:8], magic) {
-		return nil, nil, nil, ErrBadContainer
+// containerHeaderLen is magic[8] version[4] vaultID[16] createdAtMs[8]
+// snapshotLen[8].
+const containerHeaderLen = 8 + 4 + 16 + 8 + 8
+
+// container is a structurally valid but not yet authenticated container. Its
+// slices alias the input buffer; nothing here proves the bytes are genuine —
+// only Verify's HMAC check does that.
+type container struct {
+	info     *Info
+	body     []byte // everything the HMAC covers: header + snapshot
+	snapshot []byte // the SQLite bytes within body
+	tag      []byte
+}
+
+func parseContainer(raw []byte) (*container, error) {
+	if len(raw) < containerHeaderLen+sha256.Size || !bytes.Equal(raw[:8], magic) {
+		return nil, ErrBadContainer
 	}
 	r := bytes.NewReader(raw[8:])
 	var version uint32
 	binary.Read(r, binary.BigEndian, &version)
 	if version != containerVersion {
-		return nil, nil, nil, ErrBadContainer
+		return nil, ErrBadContainer
 	}
 	idBytes := make([]byte, 16)
 	io.ReadFull(r, idBytes)
 	var createdAtMs, snapLen uint64
 	binary.Read(r, binary.BigEndian, &createdAtMs)
 	binary.Read(r, binary.BigEndian, &snapLen)
-	if uint64(len(raw)) != uint64(headerLen)+snapLen+sha256.Size {
-		return nil, nil, nil, ErrBadContainer
+	if uint64(len(raw)) != uint64(containerHeaderLen)+snapLen+sha256.Size {
+		return nil, ErrBadContainer
 	}
 	id, err := shared.IDFromBytes(idBytes)
 	if err != nil {
-		return nil, nil, nil, ErrBadContainer
+		return nil, ErrBadContainer
 	}
-	body := raw[:uint64(headerLen)+snapLen]
-	tag := raw[uint64(headerLen)+snapLen:]
-	return &Info{VaultID: id, CreatedAtMs: createdAtMs, SnapshotLen: snapLen}, body, tag, nil
+	bodyLen := uint64(containerHeaderLen) + snapLen
+	return &container{
+		info:     &Info{VaultID: id, CreatedAtMs: createdAtMs, SnapshotLen: snapLen},
+		body:     raw[:bodyLen],
+		snapshot: raw[containerHeaderLen:bodyLen],
+		tag:      raw[bodyLen:],
+	}, nil
 }
 
 // DefaultBackupName suggests a timestamped file name.

@@ -642,7 +642,7 @@ func (s *Server) opBackupVerify(payload json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := s.backup.Verify(p.Path)
+	info, _, err := s.backup.Verify(p.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -658,10 +658,14 @@ func (s *Server) opBackupRestore(ctx context.Context, payload json.RawMessage) (
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.backup.Verify(p.Path); err != nil {
+	// Authenticate once and install exactly those bytes: the container is read
+	// here and never again, so it cannot be swapped after the HMAC check.
+	// Verify needs the backup key, so it must run before restoreVault locks.
+	_, snapshot, err := s.backup.Verify(p.Path)
+	if err != nil {
 		return nil, err
 	}
-	if err := s.restoreVault(p.Path); err != nil {
+	if err := s.restoreVault(snapshot); err != nil {
 		return nil, err
 	}
 	s.recorder.Record(ctx, secdomain.SeverityInfo, secdomain.EventBackupRestored, "")

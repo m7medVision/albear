@@ -41,6 +41,21 @@ func run() error {
 	var rlim unix.Rlimit
 	unix.Setrlimit(unix.RLIMIT_CORE, &rlim)
 
+	// Private by construction: every file this process creates — the database,
+	// its -wal/-shm sidecars, the VACUUM INTO snapshot temp, the static key,
+	// backup containers — is owner-only regardless of the umask we inherited.
+	// The explicit chmods below stay as defence in depth.
+	unix.Umask(0o077)
+
+	// Keep key pages out of swap, where they would outlive the process and any
+	// amount of crypto.Zero. Best-effort: RLIMIT_MEMLOCK is commonly low, and
+	// a vault that runs without this is still far better than no vault, so
+	// failure is logged and ignored rather than fatal.
+	if err := unix.Mlockall(unix.MCL_CURRENT | unix.MCL_FUTURE); err != nil {
+		log.Debug("could not lock memory pages; keys may reach swap",
+			"category", "hardening", "error", err)
+	}
+
 	paths, err := system.ResolvePaths()
 	if err != nil {
 		return err
