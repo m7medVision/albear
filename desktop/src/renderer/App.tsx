@@ -1,19 +1,23 @@
-// Desktop vault UI, mirroring the Chrome extension popup UX
-// (extension/src/popup/App.tsx): daemon status states, unlock form, record
-// list with search, per-record reveal and copy, lock button.
+// Desktop vault shell: connection/lock phase, header controls, and the section
+// nav that everything else hangs off.
+//
+// Sections are rendered only in the unlocked phase. That is what implements the
+// lock teardown: a lock unmounts them, and React drops their state — revealed
+// secrets, open editors, unsaved edits — without anything having to remember to
+// clear it.
 import * as React from 'react';
+import { MemoryRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import {
-  Check,
-  Copy,
-  Eye,
-  EyeOff,
-  Loader2,
+  Activity,
+  Archive,
+  KeyRound,
   Lock,
   RefreshCw,
-  Search,
+  Settings,
+  ShieldAlert,
+  Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
   Card,
@@ -24,33 +28,20 @@ import {
 } from '@/components/ui/card';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { UpdateBanner } from '@/components/UpdateBanner';
-import type {
-  AlbearResult,
-  RecordView,
-  SecretView,
-} from '../shared/vaultTypes';
+import { UnlockCard } from '@/components/UnlockCard';
+import { CreateVaultCard } from '@/components/CreateVaultCard';
+import { VaultProvider, useVault, type Phase } from '@/VaultContext';
+import { RecordsSection } from '@/sections/RecordsSection';
+import { ClientsSection } from '@/sections/ClientsSection';
+import { ActivitySection } from '@/sections/ActivitySection';
+import { BackupSection } from '@/sections/BackupSection';
+import { SettingsSection } from '@/sections/SettingsSection';
+import { unwrap } from '@/lib/api';
+import { cn } from '@/lib/utils';
 // The app mark itself, rather than a stand-in glyph. The 128px source keeps it
 // crisp on HiDPI at its 28px display size.
 import appIcon from '../../assets/icons/128x128.png';
 import '@/styles/globals.css';
-
-type Phase =
-  'connecting' | 'unavailable' | 'uninitialized' | 'locked' | 'unlocked';
-
-class ApiError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
-
-function unwrap<T>(result: AlbearResult<T>): T {
-  if (!result.ok) throw new ApiError(result.error.code, result.error.message);
-  return result.data;
-}
 
 function badgeFor(phase: Phase): {
   text: string;
@@ -72,119 +63,43 @@ function badgeFor(phase: Phase): {
   }
 }
 
-const SECRET_LABELS: Array<[keyof SecretView & string, string]> = [
-  ['password', 'password'],
-  ['apiKey', 'api key'],
-  ['apiSecret', 'api secret'],
-  ['notes', 'notes'],
+const SECTIONS = [
+  { to: '/records', label: 'Records', icon: KeyRound },
+  { to: '/clients', label: 'Clients', icon: Users },
+  { to: '/activity', label: 'Activity', icon: Activity },
+  { to: '/backup', label: 'Backup', icon: Archive },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
-export default function App(): React.ReactElement {
-  const [phase, setPhase] = React.useState<Phase>('connecting');
-  const [records, setRecords] = React.useState<RecordView[]>([]);
-  const [query, setQuery] = React.useState('');
-  const [listErr, setListErr] = React.useState<string | undefined>();
-  const [password, setPassword] = React.useState('');
-  const [unlocking, setUnlocking] = React.useState(false);
-  const [unlockErr, setUnlockErr] = React.useState<string | undefined>();
-  const [revealedId, setRevealedId] = React.useState<string | null>(null);
-  const [secret, setSecret] = React.useState<SecretView | null>(null);
-  const [revealBusy, setRevealBusy] = React.useState<string | null>(null);
-  const [copied, setCopied] = React.useState<string | null>(null);
+function SectionNav(): React.ReactElement {
+  return (
+    <nav className="flex items-center gap-1 border-b border-border">
+      {SECTIONS.map(({ to, label, icon: Icon }) => (
+        <NavLink
+          key={to}
+          to={to}
+          className={({ isActive }) =>
+            cn(
+              'flex items-center gap-2 px-3 py-2 text-sm rounded-t-md border-b-2 -mb-px transition-colors',
+              isActive
+                ? 'border-primary text-foreground font-medium'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )
+          }
+        >
+          <Icon className="size-4" />
+          {label}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
 
-  const copiedTimer = React.useRef<number | undefined>(undefined);
-
-  const clearReveal = React.useCallback(() => {
-    setRevealedId(null);
-    setSecret(null);
-  }, []);
-
-  const refresh = React.useCallback(async (): Promise<void> => {
-    // window.albear is absent outside Electron (e.g. jest/jsdom without a mock).
-    if (!window.albear) {
-      setPhase('unavailable');
-      return;
-    }
-    try {
-      const st = unwrap(await window.albear.status());
-      if (!st.available) setPhase('unavailable');
-      else if (!st.initialized) setPhase('uninitialized');
-      else if (!st.unlocked) setPhase('locked');
-      else setPhase('unlocked');
-    } catch {
-      setPhase('unavailable');
-    }
-  }, []);
-
-  // Initial connect + keep retrying while the daemon is unreachable.
-  React.useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  React.useEffect(() => {
-    if (phase !== 'unavailable' && phase !== 'connecting') return undefined;
-    const timer = window.setInterval(() => void refresh(), 5000);
-    return () => window.clearInterval(timer);
-  }, [phase, refresh]);
-
-  // Load records whenever unlocked; live search with a small debounce.
-  React.useEffect(() => {
-    if (phase !== 'unlocked') {
-      setRecords([]);
-      clearReveal();
-      return undefined;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      try {
-        const q = query.trim();
-        const res = unwrap(
-          q ? await window.albear.search(q) : await window.albear.list(),
-        );
-        if (cancelled) return;
-        setRecords(res.records);
-        setListErr(undefined);
-      } catch (e) {
-        if (cancelled) return;
-        if (e instanceof ApiError && e.code === 'VAULT_LOCKED') {
-          void refresh();
-          return;
-        }
-        setListErr(e instanceof Error ? e.message : 'failed to load records');
-      }
-    }, 150);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [phase, query, refresh, clearReveal]);
-
-  async function unlock(): Promise<void> {
-    if (!password || unlocking) return;
-    setUnlockErr(undefined);
-    setUnlocking(true);
-    try {
-      unwrap(await window.albear.unlock(password));
-      setPassword('');
-      await refresh();
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'RATE_LIMITED') {
-        setUnlockErr('too many attempts — wait a moment');
-      } else if (e instanceof ApiError && e.code === 'AUTH_FAILED') {
-        setUnlockErr('wrong password');
-      } else if (e instanceof ApiError && e.code === 'DAEMON_UNAVAILABLE') {
-        setUnlockErr('lost connection to vaultd');
-        void refresh();
-      } else {
-        setUnlockErr(e instanceof Error ? e.message : 'unlock failed');
-      }
-    } finally {
-      setUnlocking(false);
-    }
-  }
+function HeaderControls(): React.ReactElement | null {
+  const { phase, refresh } = useVault();
+  if (phase !== 'unlocked') return null;
 
   async function lock(): Promise<void> {
-    clearReveal();
     try {
       unwrap(await window.albear.lock());
     } finally {
@@ -192,58 +107,78 @@ export default function App(): React.ReactElement {
     }
   }
 
-  async function toggleReveal(id: string): Promise<void> {
-    if (revealedId === id) {
-      clearReveal();
-      return;
-    }
-    setRevealBusy(id);
+  // Panic is vault.lock with a different audit code, so a misclick costs no
+  // data — it costs a panic event that never happened, in a log an operator is
+  // meant to trust. Hence one click and no confirmation (a prompt would defeat
+  // the point of a panic control), but sat apart from Lock rather than beside
+  // it: two adjacent lookalike buttons is how the misclick happens.
+  async function panic(): Promise<void> {
     try {
-      const s = unwrap(await window.albear.reveal(id));
-      setSecret(s);
-      setRevealedId(id);
-      setListErr(undefined);
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'VAULT_LOCKED') void refresh();
-      else setListErr(e instanceof Error ? e.message : 'reveal failed');
+      unwrap(await window.albear.panic());
     } finally {
-      setRevealBusy(null);
+      void refresh();
     }
   }
 
-  function markCopied(key: string): void {
-    setCopied(key);
-    window.clearTimeout(copiedTimer.current);
-    copiedTimer.current = window.setTimeout(() => setCopied(null), 1500);
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => void panic()}
+        title="Lock immediately and record a panic event"
+        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+      >
+        <ShieldAlert />
+        Panic
+      </Button>
+      <span aria-hidden className="w-4" />
+      <Button variant="secondary" size="sm" onClick={() => void lock()}>
+        <Lock />
+        Lock
+      </Button>
+    </>
+  );
+}
+
+function PhaseScreen(): React.ReactElement | null {
+  const { phase, refresh } = useVault();
+
+  if (phase === 'connecting') {
+    return (
+      <p className="text-sm text-muted-foreground text-center py-10">
+        connecting to vaultd…
+      </p>
+    );
   }
 
-  async function copyText(key: string, text: string): Promise<void> {
-    try {
-      unwrap(await window.albear.copyText(text));
-      markCopied(key);
-    } catch (e) {
-      setListErr(e instanceof Error ? e.message : 'copy failed');
-    }
+  if (phase === 'unavailable') {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Cannot reach the vault daemon</AlertTitle>
+        <AlertDescription className="flex flex-col gap-2">
+          <span>is vaultd running? Start it in a terminal, then retry.</span>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="self-start"
+            onClick={() => void refresh()}
+          >
+            <RefreshCw />
+            Retry
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
   }
 
-  // Copy a record's password without showing it on screen.
-  async function copyPassword(record: RecordView): Promise<void> {
-    try {
-      const s = unwrap(await window.albear.reveal(record.id));
-      const value = s.password ?? s.apiKey ?? s.apiSecret ?? s.notes;
-      if (value === undefined) {
-        setListErr('record has no secret to copy');
-        return;
-      }
-      unwrap(await window.albear.copyText(value));
-      markCopied(`row-${record.id}`);
-      setListErr(undefined);
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'VAULT_LOCKED') void refresh();
-      else setListErr(e instanceof Error ? e.message : 'copy failed');
-    }
-  }
+  if (phase === 'uninitialized') return <CreateVaultCard />;
+  if (phase === 'locked') return <UnlockCard />;
+  return null;
+}
 
+function Shell(): React.ReactElement {
+  const { phase } = useVault();
   const badge = badgeFor(phase);
 
   return (
@@ -268,229 +203,43 @@ export default function App(): React.ReactElement {
           >
             البير
           </h1>
-          {phase === 'unlocked' && (
-            <Button variant="secondary" size="sm" onClick={() => void lock()}>
-              <Lock />
-              Lock
-            </Button>
-          )}
+          <HeaderControls />
           <Badge variant={badge.variant}>{badge.text}</Badge>
         </div>
       </header>
 
       <main className="flex-1 px-6 py-5 w-full max-w-3xl mx-auto flex flex-col gap-4">
         <UpdateBanner />
-
-        {phase === 'connecting' && (
-          <p className="text-sm text-muted-foreground text-center py-10">
-            connecting to vaultd…
-          </p>
-        )}
-
-        {phase === 'unavailable' && (
-          <Alert variant="destructive">
-            <AlertTitle>Cannot reach the vault daemon</AlertTitle>
-            <AlertDescription className="flex flex-col gap-2">
-              <span>
-                is vaultd running? Start it in a terminal, then retry.
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="self-start"
-                onClick={() => void refresh()}
-              >
-                <RefreshCw />
-                Retry
-              </Button>
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {phase === 'uninitialized' && (
-          <Card>
-            <CardHeader>
-              <CardTitle>No vault yet</CardTitle>
-              <CardDescription>
-                Create one by running <code>vault init</code> in a terminal,
-                then retry.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => void refresh()}
-              >
-                <RefreshCw />
-                Retry
-              </Button>
-            </CardContent>
-          </Card>
-        )}
-
-        {phase === 'locked' && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Unlock</CardTitle>
-              <CardDescription>Enter your master password.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2">
-              <Input
-                type="password"
-                placeholder="Master password"
-                autoFocus
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void unlock();
-                }}
-              />
-              <Button onClick={() => void unlock()} disabled={unlocking}>
-                {unlocking && <Loader2 className="animate-spin" />}
-                Unlock
-              </Button>
-              {unlockErr && (
-                <Alert variant="destructive">
-                  <AlertTitle>Cannot unlock</AlertTitle>
-                  <AlertDescription>{unlockErr}</AlertDescription>
-                </Alert>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {phase === 'unlocked' && (
+        {phase === 'unlocked' ? (
           <>
-            <div className="relative">
-              <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="pl-9"
-                placeholder="Search records…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-
-            {listErr && (
-              <Alert variant="destructive">
-                <AlertDescription>{listErr}</AlertDescription>
-              </Alert>
-            )}
-
-            <div className="flex flex-col gap-2">
-              {records.length === 0 ? (
-                <Card>
-                  <CardContent className="text-sm text-muted-foreground text-center py-6">
-                    {query.trim() ? 'no matching records' : 'vault is empty'}
-                  </CardContent>
-                </Card>
-              ) : (
-                records.map((r) => (
-                  <Card
-                    key={r.id}
-                    className="transition-colors hover:border-primary/40"
-                  >
-                    <CardContent className="flex flex-col gap-3 p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="text-base font-medium truncate">
-                            {r.name}
-                          </div>
-                          <div className="text-sm text-muted-foreground truncate">
-                            {[r.username, r.service, r.environment]
-                              .filter(Boolean)
-                              .join(' · ')}
-                          </div>
-                        </div>
-                        {r.type !== 'login' && (
-                          <Badge variant="outline">{r.type}</Badge>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => void copyPassword(r)}
-                        >
-                          {copied === `row-${r.id}` ? <Check /> : <Copy />}
-                          Copy
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() => void toggleReveal(r.id)}
-                          disabled={revealBusy === r.id}
-                        >
-                          {revealedId === r.id ? <EyeOff /> : <Eye />}
-                          {revealedId === r.id ? 'Hide' : 'Reveal'}
-                        </Button>
-                      </div>
-
-                      {revealedId === r.id && secret && (
-                        <div className="flex flex-col gap-2 border-t border-border pt-3">
-                          {SECRET_LABELS.filter(([field]) => secret[field]).map(
-                            ([field, label]) => (
-                              <div
-                                key={field}
-                                className="flex items-center gap-3"
-                              >
-                                <span className="text-xs uppercase tracking-wide text-muted-foreground w-20 shrink-0">
-                                  {label}
-                                </span>
-                                <code className="secret flex-1 min-w-0 text-sm break-all select-all rounded bg-muted px-2 py-1">
-                                  {secret[field] as string}
-                                </code>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() =>
-                                    void copyText(
-                                      `${r.id}-${field}`,
-                                      secret[field] as string,
-                                    )
-                                  }
-                                >
-                                  {copied === `${r.id}-${field}` ? (
-                                    <Check />
-                                  ) : (
-                                    <Copy />
-                                  )}
-                                </Button>
-                              </div>
-                            ),
-                          )}
-                          {secret.custom &&
-                            Object.entries(secret.custom).map(([k, v]) => (
-                              <div key={k} className="flex items-center gap-3">
-                                <span className="text-xs uppercase tracking-wide text-muted-foreground w-20 shrink-0 truncate">
-                                  {k}
-                                </span>
-                                <code className="secret flex-1 min-w-0 text-sm break-all select-all rounded bg-muted px-2 py-1">
-                                  {v}
-                                </code>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() =>
-                                    void copyText(`${r.id}-custom-${k}`, v)
-                                  }
-                                >
-                                  {copied === `${r.id}-custom-${k}` ? (
-                                    <Check />
-                                  ) : (
-                                    <Copy />
-                                  )}
-                                </Button>
-                              </div>
-                            ))}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))
-              )}
-            </div>
+            <SectionNav />
+            <Routes>
+              <Route path="/records" element={<RecordsSection />} />
+              <Route path="/clients" element={<ClientsSection />} />
+              <Route path="/activity" element={<ActivitySection />} />
+              <Route path="/backup" element={<BackupSection />} />
+              <Route path="/settings" element={<SettingsSection />} />
+              <Route path="*" element={<Navigate to="/records" replace />} />
+            </Routes>
           </>
+        ) : (
+          <PhaseScreen />
         )}
       </main>
     </div>
+  );
+}
+
+export default function App(): React.ReactElement {
+  // MemoryRouter, not Hash/BrowserRouter: navigation stays in memory and never
+  // touches the document URL, so it cannot collide with the top-level
+  // navigation blocking the renderer is hardened with, and leaves no history
+  // for a compromised renderer to walk.
+  return (
+    <MemoryRouter initialEntries={['/records']}>
+      <VaultProvider>
+        <Shell />
+      </VaultProvider>
+    </MemoryRouter>
   );
 }
