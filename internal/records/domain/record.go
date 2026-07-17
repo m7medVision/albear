@@ -93,11 +93,12 @@ func (r *Record) Validate() error {
 	return nil
 }
 
-// MatchesOrigin reports whether any of the record's URLs match the page
-// origin under the canonical matching policy.
+// MatchesOrigin reports whether any of the record's URLs covers the page
+// origin. Each URL carries its own policy, so a record may hold one exact URL
+// and one that also accepts subdomains.
 func (r *Record) MatchesOrigin(page CanonicalOrigin) bool {
 	for _, u := range r.Metadata.URLs {
-		if u.Origin.Matches(page) {
+		if u.Matches(page) {
 			return true
 		}
 	}

@@ -159,12 +159,16 @@ func TestFullLifecycleOverSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Match.
+	// Match: exact origin only, unless the record opted in.
 	var match struct {
 		Records []map[string]any `json:"records"`
 	}
-	if err := c.Call("records.match", map[string]string{"origin": "https://www.github.com"}, &match); err != nil || len(match.Records) != 1 {
+	if err := c.Call("records.match", map[string]string{"origin": "https://github.com"}, &match); err != nil || len(match.Records) != 1 {
 		t.Fatalf("%v %d", err, len(match.Records))
+	}
+	c.Call("records.match", map[string]string{"origin": "https://www.github.com"}, &match)
+	if len(match.Records) != 0 {
+		t.Fatal("subdomain matched without the opt-in")
 	}
 	c.Call("records.match", map[string]string{"origin": "https://github.com.evil.example"}, &match)
 	if len(match.Records) != 0 {
@@ -835,6 +839,90 @@ func TestRevealForOriginPolicy(t *testing.T) {
 	}, nil)
 	if apiCode(t, err) != protocol.CodeDenied {
 		t.Fatal("http fill allowed by default")
+	}
+
+	// A sibling subdomain is a different site. This is the escalation the
+	// exact default closes: on a shared apex, evil.example.com must not be
+	// handed the credential for accounts.example.com.
+	err = cli.Call("records.revealForOrigin", map[string]string{
+		"id": created.ID, "origin": "https://evil.github.com",
+	}, nil)
+	if apiCode(t, err) != protocol.CodeDenied {
+		t.Fatal("sibling subdomain reveal allowed by default")
+	}
+}
+
+// TestRevealForOriginSubdomainOptIn: the opt-in is read from the stored record
+// daemon-side (invariant 9). A client never sends a policy, so a compromised
+// one cannot widen its own matching.
+func TestRevealForOriginSubdomainOptIn(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+
+	var loose struct {
+		ID string `json:"id"`
+	}
+	if err := cli.Call("records.create", map[string]any{
+		"name": "Example", "username": "mo", "password": "pw",
+		"urlEntries": []map[string]any{{"url": "https://example.com", "sub": true}},
+	}, &loose); err != nil {
+		t.Fatal(err)
+	}
+
+	// The opt-in reaches subdomains…
+	var out struct {
+		Password string `json:"password"`
+	}
+	if err := cli.Call("records.revealForOrigin", map[string]string{
+		"id": loose.ID, "origin": "https://accounts.example.com",
+	}, &out); err != nil || out.Password != "pw" {
+		t.Fatalf("opted-in subdomain reveal: %+v %v", out, err)
+	}
+	// …and no further.
+	for _, origin := range []string{
+		"https://evil-example.com",
+		"https://example.com.attacker.example",
+		"http://www.example.com",
+	} {
+		err := cli.Call("records.revealForOrigin", map[string]string{
+			"id": loose.ID, "origin": origin,
+		}, nil)
+		if apiCode(t, err) != protocol.CodeDenied {
+			t.Fatalf("%s allowed against an opted-in record: %v", origin, err)
+		}
+	}
+
+	// The stored policy is what counts: a record saved without the opt-in
+	// stays exact no matter what the client asks for.
+	var strict struct {
+		ID string `json:"id"`
+	}
+	if err := cli.Call("records.create", map[string]any{
+		"name": "Strict", "username": "mo", "password": "pw",
+		"urls": []string{"https://strict.example"},
+	}, &strict); err != nil {
+		t.Fatal(err)
+	}
+	err := cli.Call("records.revealForOrigin", map[string]string{
+		"id": strict.ID, "origin": "https://www.strict.example",
+	}, nil)
+	if apiCode(t, err) != protocol.CodeDenied {
+		t.Fatalf("plain urls field granted subdomain matching: %v", err)
+	}
+
+	// The flag round-trips to the editor so a later save does not reset it.
+	var view struct {
+		URLEntries []struct {
+			URL string `json:"url"`
+			Sub bool   `json:"sub"`
+		} `json:"urlEntries"`
+	}
+	if err := cli.Call("records.show", map[string]string{"ref": loose.ID}, &view); err != nil {
+		t.Fatal(err)
+	}
+	if len(view.URLEntries) != 1 || !view.URLEntries[0].Sub {
+		t.Fatalf("opt-in not surfaced to clients: %+v", view.URLEntries)
 	}
 }
 

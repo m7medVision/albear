@@ -3,8 +3,10 @@ package application
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,9 +206,15 @@ func TestMatchOrigins(t *testing.T) {
 	e.records.Create(ctx, domain.TypeLogin, loginMeta(t, "GitHub", "mo", "https://github.com"),
 		domain.SecretPayload{Password: shared.NewSecretFromString("x")})
 
-	hits, err := e.records.Match("https://www.github.com/login")
+	hits, err := e.records.Match("https://github.com/login")
 	if err != nil || len(hits) != 1 {
-		t.Fatalf("%d %v", len(hits), err)
+		t.Fatalf("exact origin: %d %v", len(hits), err)
+	}
+	// Exact by default: a subdomain does not match a record stored for the
+	// apex unless that record opted in.
+	hits, _ = e.records.Match("https://www.github.com/login")
+	if len(hits) != 0 {
+		t.Fatal("subdomain matched without the opt-in")
 	}
 	hits, _ = e.records.Match("https://github.com.attacker.example")
 	if len(hits) != 0 {
@@ -214,6 +222,75 @@ func TestMatchOrigins(t *testing.T) {
 	}
 	if _, err := e.records.Match("garbage"); err == nil {
 		t.Fatal("invalid origin accepted")
+	}
+}
+
+// TestMatchOriginsWithSubdomainOptIn: the index is the extension's fill path,
+// so the opt-in has to reach it and nothing else.
+func TestMatchOriginsWithSubdomainOptIn(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	u, err := domain.NewLoginURLWithPolicy("https://example.com", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := domain.RecordMetadata{Name: "Example", Username: "mo", URLs: []domain.LoginURL{u}}
+	if _, err := e.records.Create(ctx, domain.TypeLogin, meta,
+		domain.SecretPayload{Password: shared.NewSecretFromString("x")}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, origin := range []string{"https://example.com", "https://www.example.com", "https://accounts.example.com"} {
+		hits, err := e.records.Match(origin)
+		if err != nil || len(hits) != 1 {
+			t.Fatalf("%s: %d %v", origin, len(hits), err)
+		}
+	}
+	// Still not a licence for lookalikes, http, or another port.
+	for _, origin := range []string{
+		"https://evil-example.com",
+		"https://example.com.attacker.example",
+		"http://www.example.com",
+		"https://www.example.com:8443",
+	} {
+		hits, _ := e.records.Match(origin)
+		if len(hits) != 0 {
+			t.Fatalf("%s matched an opted-in example.com record", origin)
+		}
+	}
+}
+
+// TestSubdomainOptInSurvivesReload: the flag lives in the encrypted metadata,
+// so it has to come back through encode/decode and the index rebuild at
+// unlock. If it did not, a reopened vault would quietly enforce a different
+// policy from the one the user set.
+func TestSubdomainOptInSurvivesReload(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	loose, err := domain.NewLoginURLWithPolicy("https://example.com", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strict, err := domain.NewLoginURL("https://github.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := domain.RecordMetadata{Name: "Mixed", Username: "mo", URLs: []domain.LoginURL{loose, strict}}
+	if _, err := e.records.Create(ctx, domain.TypeLogin, meta,
+		domain.SecretPayload{Password: shared.NewSecretFromString("x")}); err != nil {
+		t.Fatal(err)
+	}
+
+	e.records.ClearIndex()
+	if err := e.records.LoadIndex(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if hits, _ := e.records.Match("https://www.example.com"); len(hits) != 1 {
+		t.Fatal("the opt-in did not survive the round trip")
+	}
+	if hits, _ := e.records.Match("https://www.github.com"); len(hits) != 0 {
+		t.Fatal("the exact URL came back permissive")
 	}
 }
 
@@ -431,5 +508,97 @@ func TestCodecRoundTrip(t *testing.T) {
 	}
 	if _, _, err := decodeMetadata([]byte(`{"urls":["::bad::"]}`)); err == nil {
 		t.Fatal("bad url in metadata accepted")
+	}
+	if _, _, err := decodeMetadata([]byte(`{"urlEntries":[{"url":"::bad::"}]}`)); err == nil {
+		t.Fatal("bad url in urlEntries accepted")
+	}
+}
+
+// TestCodecURLPolicyEncoding pins the wire layout of the two URL generations.
+// Getting this wrong in either direction silently changes which sites a record
+// will fill, so it is asserted on the JSON rather than through a round trip.
+func TestCodecURLPolicyEncoding(t *testing.T) {
+	strict, _ := domain.NewLoginURL("https://github.com")
+	loose, _ := domain.NewLoginURLWithPolicy("https://example.com", true)
+	meta := domain.RecordMetadata{Name: "n", URLs: []domain.LoginURL{strict, loose}}
+
+	b, err := encodeMetadata(domain.TypeLogin, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	// New records carry urlEntries only; emitting legacy urls too would leave
+	// two sources of truth for the same field.
+	if _, legacy := raw["urls"]; legacy {
+		t.Fatalf("encoder still writes the legacy urls field: %s", b)
+	}
+	entries, ok := raw["urlEntries"].([]any)
+	if !ok || len(entries) != 2 {
+		t.Fatalf("urlEntries missing: %s", b)
+	}
+	// The exact case is the common one and stays off the wire.
+	if _, present := entries[0].(map[string]any)["sub"]; present {
+		t.Fatalf("exact URL wrote a sub flag: %s", b)
+	}
+	if entries[1].(map[string]any)["sub"] != true {
+		t.Fatalf("opt-in not encoded: %s", b)
+	}
+
+	_, got, err := decodeMetadata(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.URLs[0].AllowSubdomains || !got.URLs[1].AllowSubdomains {
+		t.Fatalf("policy did not round trip: %+v", got.URLs)
+	}
+}
+
+// TestCodecDecodesLegacyURLsAsExact is the upgrade path: every record written
+// before the opt-in existed must come back exact-matching. Decoding those as
+// permissive would silently keep the old cross-subdomain behaviour alive on
+// exactly the records this change is meant to tighten.
+func TestCodecDecodesLegacyURLsAsExact(t *testing.T) {
+	legacy := []byte(`{"type":"login","name":"GitHub","username":"mo",` +
+		`"urls":["https://github.com","https://gist.github.com"],` +
+		`"createdAtMs":1000,"updatedAtMs":2000}`)
+
+	typ, got, err := decodeMetadata(legacy)
+	if err != nil || typ != domain.TypeLogin {
+		t.Fatal(err)
+	}
+	if len(got.URLs) != 2 {
+		t.Fatalf("legacy urls lost: %+v", got.URLs)
+	}
+	for _, u := range got.URLs {
+		if u.AllowSubdomains {
+			t.Fatalf("legacy url %q decoded as permissive", u.Raw)
+		}
+	}
+	if got.Name != "GitHub" || got.Username != "mo" || got.CreatedAt.UnixMilli() != 1000 {
+		t.Fatalf("legacy metadata lost: %+v", got)
+	}
+
+	// Re-encoding upgrades it to urlEntries without changing the policy.
+	b, err := encodeMetadata(typ, got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"urlEntries"`) || strings.Contains(string(b), `"sub"`) {
+		t.Fatalf("re-encode changed the policy: %s", b)
+	}
+
+	// urlEntries supersedes urls when a payload somehow carries both.
+	both := []byte(`{"type":"login","name":"n",` +
+		`"urls":["https://legacy.example"],` +
+		`"urlEntries":[{"url":"https://current.example","sub":true}]}`)
+	_, got, err = decodeMetadata(both)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.URLs) != 1 || got.URLs[0].Raw != "https://current.example" || !got.URLs[0].AllowSubdomains {
+		t.Fatalf("urlEntries did not supersede urls: %+v", got.URLs)
 	}
 }

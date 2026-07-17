@@ -28,18 +28,29 @@ type changePasswordPayload struct {
 }
 
 type recordFields struct {
-	Type        string            `json:"type,omitempty"`
-	Name        string            `json:"name"`
-	Username    string            `json:"username,omitempty"`
-	Service     string            `json:"service,omitempty"`
-	Environment string            `json:"environment,omitempty"`
-	URLs        []string          `json:"urls,omitempty"`
-	Tags        []string          `json:"tags,omitempty"`
-	Password    string            `json:"password,omitempty"`
-	Notes       string            `json:"notes,omitempty"`
-	APIKey      string            `json:"apiKey,omitempty"`
-	APISecret   string            `json:"apiSecret,omitempty"`
-	Custom      map[string]string `json:"custom,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Name        string `json:"name"`
+	Username    string `json:"username,omitempty"`
+	Service     string `json:"service,omitempty"`
+	Environment string `json:"environment,omitempty"`
+	// URLs holds plain URLs, which always match exactly. URLEntries carries
+	// the per-URL subdomain opt-in and supersedes URLs when present. The
+	// extension only ever sends URLs: auto-saved records are exact, and
+	// widening a record's matching is a decision made in an editor, not
+	// inferred from a page.
+	URLs       []string          `json:"urls,omitempty"`
+	URLEntries []urlEntryField   `json:"urlEntries,omitempty"`
+	Tags       []string          `json:"tags,omitempty"`
+	Password   string            `json:"password,omitempty"`
+	Notes      string            `json:"notes,omitempty"`
+	APIKey     string            `json:"apiKey,omitempty"`
+	APISecret  string            `json:"apiSecret,omitempty"`
+	Custom     map[string]string `json:"custom,omitempty"`
+}
+
+type urlEntryField struct {
+	URL string `json:"url"`
+	Sub bool   `json:"sub,omitempty"`
 }
 
 type updatePayload struct {
@@ -99,29 +110,35 @@ type limitPayload struct {
 // recordView is the redacted metadata projection returned by list/search/
 // match/show. It never contains secret payload fields.
 type recordView struct {
-	ID          string   `json:"id"`
-	Type        string   `json:"type"`
-	Revision    uint64   `json:"revision"`
-	Name        string   `json:"name"`
-	Username    string   `json:"username,omitempty"`
-	Service     string   `json:"service,omitempty"`
-	Environment string   `json:"environment,omitempty"`
-	URLs        []string `json:"urls,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	CreatedAtMs int64    `json:"createdAtMs"`
-	UpdatedAtMs int64    `json:"updatedAtMs"`
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Revision    uint64 `json:"revision"`
+	Name        string `json:"name"`
+	Username    string `json:"username,omitempty"`
+	Service     string `json:"service,omitempty"`
+	Environment string `json:"environment,omitempty"`
+	// URLs stays for readers that only want the addresses. URLEntries adds each
+	// URL's matching policy, so an editor can show the opt-in and write it back
+	// instead of silently resetting it to exact on the next save.
+	URLs        []string        `json:"urls,omitempty"`
+	URLEntries  []urlEntryField `json:"urlEntries,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
+	CreatedAtMs int64           `json:"createdAtMs"`
+	UpdatedAtMs int64           `json:"updatedAtMs"`
 }
 
 func toRecordView(e *recordsapp.IndexEntry) recordView {
 	urls := make([]string, 0, len(e.Metadata.URLs))
+	entries := make([]urlEntryField, 0, len(e.Metadata.URLs))
 	for _, u := range e.Metadata.URLs {
 		urls = append(urls, u.Raw)
+		entries = append(entries, urlEntryField{URL: u.Raw, Sub: u.AllowSubdomains})
 	}
 	return recordView{
 		ID: e.ID.String(), Type: string(e.Type), Revision: e.Revision,
 		Name: e.Metadata.Name, Username: e.Metadata.Username,
 		Service: e.Metadata.Service, Environment: e.Metadata.Environment,
-		URLs: urls, Tags: e.Metadata.Tags,
+		URLs: urls, URLEntries: entries, Tags: e.Metadata.Tags,
 		CreatedAtMs: e.Metadata.CreatedAt.UnixMilli(),
 		UpdatedAtMs: e.Metadata.UpdatedAt.UnixMilli(),
 	}
@@ -161,9 +178,16 @@ func toSecretView(p domain.SecretPayload) secretView {
 
 // fieldsToDomain converts submitted record fields into domain values.
 func fieldsToDomain(f recordFields) (domain.RecordMetadata, domain.SecretPayload, error) {
-	urls := make([]domain.LoginURL, 0, len(f.URLs))
-	for _, raw := range f.URLs {
-		u, err := domain.NewLoginURL(raw)
+	entries := f.URLEntries
+	if entries == nil {
+		entries = make([]urlEntryField, 0, len(f.URLs))
+		for _, raw := range f.URLs {
+			entries = append(entries, urlEntryField{URL: raw}) // exact
+		}
+	}
+	urls := make([]domain.LoginURL, 0, len(entries))
+	for _, e := range entries {
+		u, err := domain.NewLoginURLWithPolicy(e.URL, e.Sub)
 		if err != nil {
 			return domain.RecordMetadata{}, domain.SecretPayload{}, err
 		}
