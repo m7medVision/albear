@@ -233,6 +233,23 @@ export interface BackupResult {
   path: string;
 }
 
+/**
+ * The user dismissed a file dialog or declined a confirmation. This is a
+ * successful outcome carrying "nothing happened" — not an error — so callers
+ * must not surface it as one.
+ */
+export interface Canceled {
+  canceled: true;
+}
+
+export interface Restored {
+  restored: true;
+}
+
+export function isCanceled(value: unknown): value is Canceled {
+  return typeof value === 'object' && value !== null && 'canceled' in value;
+}
+
 // Error codes produced locally (never by the daemon). Daemon codes are the
 // PRD wire codes: VAULT_LOCKED, AUTH_FAILED, NOT_FOUND, DENIED,
 // INTEGRITY_FAILURE, CONFLICT, INVALID_REQUEST, RATE_LIMITED, ALREADY_EXISTS,

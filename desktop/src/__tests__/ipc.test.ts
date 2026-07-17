@@ -9,6 +9,9 @@
 // and — for update — that the payload the daemon receives still carries every
 // secret, since records.update replaces the record rather than patching it.
 
+import fs from 'fs';
+import path from 'path';
+
 const handlers = new Map<string, (...args: unknown[]) => unknown>();
 
 jest.mock('electron', () => ({
@@ -156,5 +159,50 @@ describe('albear:delete validation', () => {
     const res = await invoke('albear:delete', 'r1');
     expect(res.ok).toBe(true);
     expect(call).toHaveBeenCalledWith('records.delete', { id: 'r1' });
+  });
+});
+
+describe('albear:events validation', () => {
+  it('rejects a non-integer limit', async () => {
+    expectRejected(await invoke('albear:events', 2.5));
+  });
+
+  it('rejects a limit past the client ceiling', async () => {
+    expectRejected(await invoke('albear:events', 100_000));
+  });
+
+  it('omits the limit entirely when none is given, letting the daemon default', async () => {
+    await invoke('albear:events');
+    expect(call).toHaveBeenCalledWith('events.recent', {});
+  });
+});
+
+describe('vault destruction is not reachable from the desktop app', () => {
+  // The desktop connects in CLI mode and therefore holds CapVaultDestroy: the
+  // daemon would accept vault.destroy from it. Nothing but this absence stops
+  // it, so the absence is worth a test. Destruction stays an interactive,
+  // password-gated CLI operation (invariant 7).
+  const sourceDir = path.join(__dirname, '..');
+
+  function sourceFiles(dir: string): string[] {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        return entry.name === '__tests__' ? [] : sourceFiles(full);
+      }
+      return /\.tsx?$/.test(entry.name) ? [full] : [];
+    });
+  }
+
+  it('never sends the vault.destroy operation', () => {
+    const offenders = sourceFiles(sourceDir).filter((file) =>
+      fs.readFileSync(file, 'utf8').includes('vault.destroy'),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('registers no channel whose name suggests destruction', () => {
+    const channels = [...handlers.keys()];
+    expect(channels.filter((c) => /destroy/i.test(c))).toEqual([]);
   });
 });
