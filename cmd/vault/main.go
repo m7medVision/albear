@@ -756,9 +756,11 @@ func cmdClients(args []string) int {
 	case "approve":
 		var pending struct {
 			Pending []struct {
-				PairingID string `json:"pairingId"`
-				Label     string `json:"label"`
-				Phrase    string `json:"phrase"`
+				PairingID    string   `json:"pairingId"`
+				KindName     string   `json:"kindName"`
+				Label        string   `json:"label"`
+				Phrase       string   `json:"phrase"`
+				Capabilities []string `json:"capabilities"`
 			} `json:"pending"`
 		}
 		if _, err := call("clients.pending", nil, &pending); err != nil {
@@ -769,7 +771,12 @@ func cmdClients(args []string) int {
 			return exitOK
 		}
 		p := pending.Pending[0]
-		fmt.Printf("Pairing request: %s\nPhrase: %s\n", p.Label, p.Phrase)
+		// Show the kind and every capability approval would grant: consent is
+		// only meaningful if the operator can see the privilege being asked for.
+		fmt.Printf("Pairing request: %s\nKind: %s\nPhrase: %s\nGrants:\n", p.Label, p.KindName, p.Phrase)
+		for _, c := range p.Capabilities {
+			fmt.Printf("  - %s\n", c)
+		}
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			fmt.Fprintln(os.Stderr, "vault: approval requires an interactive terminal")
 			return exitDenied

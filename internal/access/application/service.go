@@ -68,7 +68,9 @@ func (s *Service) RequestPairing(kind domain.ClientKind, label string, staticKey
 	if len(staticKey) != 32 {
 		return nil, shared.ErrValidation
 	}
-	if domain.DefaultCapabilities(kind) == 0 {
+	// Only browser kinds may pair; administrative kinds would escalate the
+	// pairing channel into the full CLI capability set.
+	if !kind.IsPairable() || domain.DefaultCapabilities(kind) == 0 {
 		return nil, shared.ErrValidation
 	}
 	idBytes, err := crypto.NewID()

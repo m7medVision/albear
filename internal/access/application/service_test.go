@@ -111,10 +111,40 @@ func TestPairingPhraseCommitsToKeys(t *testing.T) {
 	}
 }
 
+// TestPairingRejectsAdministrativeKinds: pairing is reachable by any same-user
+// process, so the kinds that map to the administrative capability set must not
+// be requestable there. Administrative access comes from the CLI's
+// peer-credential path instead.
+func TestPairingRejectsAdministrativeKinds(t *testing.T) {
+	cs, _ := newEnv(t)
+	for _, kind := range []domain.ClientKind{domain.KindCLI, domain.KindAdministrativeTool} {
+		p, err := cs.RequestPairing(kind, "evil", staticKey(4))
+		if !errors.Is(err, shared.ErrValidation) {
+			t.Fatalf("kind %v accepted over pairing: %v", kind, err)
+		}
+		if p != nil {
+			t.Fatalf("kind %v produced a pending pairing", kind)
+		}
+	}
+	if n := len(cs.ListPending()); n != 0 {
+		t.Fatalf("%d pending pairings after rejection", n)
+	}
+	// Unknown kinds fail closed too.
+	if _, err := cs.RequestPairing(domain.ClientKind(99), "x", staticKey(5)); !errors.Is(err, shared.ErrValidation) {
+		t.Fatalf("unknown kind accepted: %v", err)
+	}
+	// Browser kinds still pair.
+	for _, kind := range []domain.ClientKind{domain.KindChromeExtension, domain.KindChromeNativeHost} {
+		if _, err := cs.RequestPairing(kind, "browser", staticKey(6)); err != nil {
+			t.Fatalf("kind %v could not pair: %v", kind, err)
+		}
+	}
+}
+
 func TestApproveRequiresUnlockedVault(t *testing.T) {
 	cs, vs := newEnv(t)
 	ctx := context.Background()
-	p, _ := cs.RequestPairing(domain.KindCLI, "cli", staticKey(3))
+	p, _ := cs.RequestPairing(domain.KindChromeExtension, "chrome", staticKey(3))
 	vs.Lock()
 	if err := cs.Approve(ctx, p.ID); !errors.Is(err, shared.ErrVaultLocked) {
 		t.Fatalf("approve while locked: %v", err)
@@ -204,7 +234,7 @@ func TestLookupMissing(t *testing.T) {
 func TestTouchLastSeen(t *testing.T) {
 	cs, _ := newEnv(t)
 	ctx := context.Background()
-	p, _ := cs.RequestPairing(domain.KindCLI, "cli", staticKey(5))
+	p, _ := cs.RequestPairing(domain.KindChromeExtension, "chrome", staticKey(5))
 	cs.Approve(ctx, p.ID)
 	clientID, _, _ := cs.ClaimCredential(p.ID)
 	if err := cs.TouchLastSeen(ctx, clientID); err != nil {

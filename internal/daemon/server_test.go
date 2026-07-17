@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	accessdomain "github.com/m7medVision/albear/internal/access/domain"
 	"github.com/m7medVision/albear/internal/adapters/protocol"
 	"github.com/m7medVision/albear/internal/client"
 	"github.com/m7medVision/albear/internal/infrastructure/crypto"
@@ -454,6 +455,207 @@ func TestPairingFlowEndToEnd(t *testing.T) {
 	}
 	if _, err := client.DialPaired(d.socket, extKey, claim.ClientID, credential, daemonKey); err == nil {
 		t.Fatal("revoked client reconnected")
+	}
+}
+
+// TestPairingRejectsAdministrativeKinds covers the privilege-escalation fix:
+// the pairing channel is reachable by any same-user process, so it must not
+// hand out the administrative capability set.
+func TestPairingRejectsAdministrativeKinds(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+
+	extKey, _ := transport.GenerateStaticKey()
+	pairConn, err := client.DialPairing(d.socket, extKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pairConn.Close()
+
+	// KindCLI (1) and KindAdministrativeTool (4) both map to CLICapabilities.
+	for _, kind := range []int{1, 4} {
+		err := pairConn.Call("clients.pair", map[string]any{
+			"kind": kind, "label": "evil@test", "staticKey": hex.EncodeToString(extKey.Public),
+		}, nil)
+		if apiCode(t, err) != protocol.CodeInvalid {
+			t.Fatalf("kind %d accepted over pairing: %v", kind, err)
+		}
+	}
+	// A rejected request must leave nothing behind to approve.
+	var pending struct {
+		Pending []struct {
+			PairingID string `json:"pairingId"`
+		} `json:"pending"`
+	}
+	if err := cli.Call("clients.pending", nil, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if len(pending.Pending) != 0 {
+		t.Fatalf("rejected pairing left %d pending", len(pending.Pending))
+	}
+
+	// The browser kind still pairs, with the restricted set.
+	var ok struct {
+		PairingID string `json:"pairingId"`
+	}
+	if err := pairConn.Call("clients.pair", map[string]any{
+		"kind": 2, "label": "chrome@test", "staticKey": hex.EncodeToString(extKey.Public),
+	}, &ok); err != nil || ok.PairingID == "" {
+		t.Fatalf("chrome extension could not pair: %v", err)
+	}
+}
+
+// TestPendingDisclosesKindAndCapabilities: the operator must see the privilege
+// they are approving, not just a label and a phrase.
+func TestPendingDisclosesKindAndCapabilities(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+
+	extKey, _ := transport.GenerateStaticKey()
+	pairConn, err := client.DialPairing(d.socket, extKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pairConn.Close()
+	if err := pairConn.Call("clients.pair", map[string]any{
+		"kind": 2, "label": "chrome@test", "staticKey": hex.EncodeToString(extKey.Public),
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var pending struct {
+		Pending []struct {
+			KindName     string   `json:"kindName"`
+			Capabilities []string `json:"capabilities"`
+		} `json:"pending"`
+	}
+	if err := cli.Call("clients.pending", nil, &pending); err != nil || len(pending.Pending) != 1 {
+		t.Fatal(err)
+	}
+	p := pending.Pending[0]
+	if p.KindName != "chrome-extension" {
+		t.Fatalf("kind not disclosed: %q", p.KindName)
+	}
+	want := accessdomain.ChromeCapabilities.Names()
+	if len(p.Capabilities) != len(want) {
+		t.Fatalf("capabilities not disclosed: %v", p.Capabilities)
+	}
+	for i, c := range want {
+		if p.Capabilities[i] != c {
+			t.Fatalf("capability %d: got %q want %q", i, p.Capabilities[i], c)
+		}
+	}
+	// Disclosure must not leak the administrative set into a browser prompt.
+	for _, c := range p.Capabilities {
+		if c == "clients.admin" || c == "vault.destroy" || c == "backup.create" {
+			t.Fatalf("browser pairing discloses admin capability %q", c)
+		}
+	}
+}
+
+// pairExtension runs the full pairing dance and returns a paired Chrome-kind
+// connection, which is the only kind that carries createLogin/updateLogin.
+func pairExtension(t *testing.T, d *testDaemon, cli *client.Client) *client.Client {
+	t.Helper()
+	extKey, _ := transport.GenerateStaticKey()
+	pairConn, err := client.DialPairing(d.socket, extKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pairConn.Close()
+
+	var pairResp struct {
+		PairingID string `json:"pairingId"`
+	}
+	if err := pairConn.Call("clients.pair", map[string]any{
+		"kind": 2, "label": "chrome@test", "staticKey": hex.EncodeToString(extKey.Public),
+	}, &pairResp); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Call("clients.approve", map[string]string{"pairingId": pairResp.PairingID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var claim struct {
+		ClientID        string `json:"clientId"`
+		Credential      string `json:"credential"`
+		DaemonStaticKey string `json:"daemonStaticKey"`
+	}
+	if err := pairConn.Call("clients.claim", map[string]string{"pairingId": pairResp.PairingID}, &claim); err != nil {
+		t.Fatal(err)
+	}
+	credential, _ := hex.DecodeString(claim.Credential)
+	daemonKey, _ := hex.DecodeString(claim.DaemonStaticKey)
+	ext, err := client.DialPaired(d.socket, extKey, claim.ClientID, credential, daemonKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ext.Close() })
+	return ext
+}
+
+// TestLoginScopedRecordOps: the browser capabilities cover logins only, and
+// that scope is enforced daemon-side rather than trusted from the client.
+func TestLoginScopedRecordOps(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+	ext := pairExtension(t, d, cli)
+
+	// A client-supplied non-login type is overridden, not honoured.
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := ext.Call("records.createLogin", map[string]any{
+		"type": "api", "name": "ApiKey", "username": "mo",
+		"urls": []string{"https://example.com"}, "password": "pw",
+	}, &created); err != nil {
+		t.Fatal(err)
+	}
+	// Read back over the CLI: the extension cannot read records itself.
+	var shown struct {
+		Type string `json:"type"`
+	}
+	if err := cli.Call("records.show", map[string]string{"ref": created.ID}, &shown); err != nil {
+		t.Fatal(err)
+	}
+	if shown.Type != "login" {
+		t.Fatalf("createLogin produced a %q record", shown.Type)
+	}
+
+	// updateLogin must refuse a record that is not a login.
+	var note struct {
+		ID string `json:"id"`
+	}
+	if err := cli.Call("records.create", map[string]any{
+		"type": "note", "name": "Secrets", "notes": "body",
+	}, &note); err != nil {
+		t.Fatal(err)
+	}
+	err := ext.Call("records.updateLogin", map[string]any{
+		"id": note.ID, "expectedRevision": 1, "name": "Secrets", "notes": "overwritten",
+	}, nil)
+	if apiCode(t, err) != protocol.CodeDenied {
+		t.Fatalf("updateLogin touched a note: %v", err)
+	}
+	// The note is untouched.
+	var revealed struct {
+		Notes string `json:"notes"`
+	}
+	if err := cli.Call("records.reveal", map[string]string{"ref": note.ID}, &revealed); err != nil {
+		t.Fatal(err)
+	}
+	if revealed.Notes != "body" {
+		t.Fatalf("note was modified: %q", revealed.Notes)
+	}
+
+	// updateLogin still works on an actual login.
+	if err := ext.Call("records.updateLogin", map[string]any{
+		"id": created.ID, "expectedRevision": 1, "name": "ApiKey", "username": "mo",
+		"urls": []string{"https://example.com"}, "password": "pw2",
+	}, nil); err != nil {
+		t.Fatalf("updateLogin on a login: %v", err)
 	}
 }
 

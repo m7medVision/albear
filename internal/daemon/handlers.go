@@ -184,10 +184,14 @@ func (s *Server) dispatch(ctx context.Context, st *connState, op string, payload
 		return s.opChangePassword(ctx, payload)
 	case "vault.destroy":
 		return s.opDestroy(ctx, payload)
-	case "records.create", "records.createLogin":
-		return s.opCreate(ctx, payload)
-	case "records.update", "records.updateLogin":
-		return s.opUpdate(ctx, payload)
+	case "records.create":
+		return s.opCreate(ctx, payload, false)
+	case "records.createLogin":
+		return s.opCreate(ctx, payload, true)
+	case "records.update":
+		return s.opUpdate(ctx, payload, false)
+	case "records.updateLogin":
+		return s.opUpdate(ctx, payload, true)
 	case "records.delete":
 		return s.opDelete(ctx, payload)
 	case "records.list":
@@ -340,13 +344,17 @@ func (s *Server) opDestroy(ctx context.Context, payload json.RawMessage) (any, e
 	return struct{}{}, nil
 }
 
-func (s *Server) opCreate(ctx context.Context, payload json.RawMessage) (any, error) {
+// opCreate creates a record. loginOnly marks the browser-facing
+// records.createLogin capability, whose grant covers logins and nothing else:
+// the client-supplied type is overridden rather than trusted, so the narrow
+// capability cannot mint a note or an api record.
+func (s *Server) opCreate(ctx context.Context, payload json.RawMessage, loginOnly bool) (any, error) {
 	p, err := decode[recordFields](payload)
 	if err != nil {
 		return nil, err
 	}
 	t := recdomain.RecordType(p.Type)
-	if p.Type == "" {
+	if p.Type == "" || loginOnly {
 		t = recdomain.TypeLogin
 	}
 	meta, secret, err := fieldsToDomain(p)
@@ -360,7 +368,11 @@ func (s *Server) opCreate(ctx context.Context, payload json.RawMessage) (any, er
 	return map[string]string{"id": id.String()}, nil
 }
 
-func (s *Server) opUpdate(ctx context.Context, payload json.RawMessage) (any, error) {
+// opUpdate edits a record. loginOnly marks records.updateLogin, which must not
+// reach a note or an api record: the stored type is read daemon-side rather
+// than taken from the request, since Update preserves it and the client could
+// otherwise overwrite any record it can name.
+func (s *Server) opUpdate(ctx context.Context, payload json.RawMessage, loginOnly bool) (any, error) {
 	p, err := decode[updatePayload](payload)
 	if err != nil {
 		return nil, err
@@ -368,6 +380,15 @@ func (s *Server) opUpdate(ctx context.Context, payload json.RawMessage) (any, er
 	id, err := shared.IDFromString(p.ID)
 	if err != nil {
 		return nil, shared.ErrValidation
+	}
+	if loginOnly {
+		entry, err := s.records.Show(id)
+		if err != nil {
+			return nil, err
+		}
+		if entry.Type != recdomain.TypeLogin {
+			return nil, shared.ErrAuthorizationDeny
+		}
 	}
 	meta, secret, err := fieldsToDomain(p.recordFields)
 	if err != nil {
@@ -520,17 +541,29 @@ func (s *Server) opCancel(payload json.RawMessage) (any, error) {
 	return struct{}{}, nil
 }
 
+// opPending lists pairing requests. It reports the requested kind by name and
+// the concrete capabilities approval would grant, so the operator consents to
+// the actual privilege rather than to a label and a phrase.
 func (s *Server) opPending() (any, error) {
 	pending := s.access.ListPending()
 	type view struct {
-		PairingID string `json:"pairingId"`
-		Kind      int    `json:"kind"`
-		Label     string `json:"label"`
-		Phrase    string `json:"phrase"`
+		PairingID    string   `json:"pairingId"`
+		Kind         int      `json:"kind"`
+		KindName     string   `json:"kindName"`
+		Label        string   `json:"label"`
+		Phrase       string   `json:"phrase"`
+		Capabilities []string `json:"capabilities"`
 	}
 	out := make([]view, 0, len(pending))
 	for _, p := range pending {
-		out = append(out, view{p.ID.String(), int(p.Kind), p.Label, p.Phrase})
+		out = append(out, view{
+			PairingID:    p.ID.String(),
+			Kind:         int(p.Kind),
+			KindName:     p.Kind.String(),
+			Label:        p.Label,
+			Phrase:       p.Phrase,
+			Capabilities: accessdomain.DefaultCapabilities(p.Kind).Names(),
+		})
 	}
 	return map[string]any{"pending": out}, nil
 }
