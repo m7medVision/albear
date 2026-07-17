@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/m7medVision/albear/internal/catalog"
 	"github.com/m7medVision/albear/internal/infrastructure/crypto"
 	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
 	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
@@ -27,6 +28,8 @@ type Keyring struct {
 	Secret   []byte
 	Audit    []byte
 	Backup   []byte
+	// Catalog keys the authenticated vault-state root (see internal/catalog).
+	Catalog []byte
 }
 
 func (k *Keyring) wipe() {
@@ -34,6 +37,7 @@ func (k *Keyring) wipe() {
 	crypto.Zero(k.Secret)
 	crypto.Zero(k.Audit)
 	crypto.Zero(k.Backup)
+	crypto.Zero(k.Catalog)
 }
 
 // ErrRateLimited is returned when unlock attempts arrive faster than the
@@ -53,6 +57,11 @@ type Service struct {
 
 	failedUnlocks int
 	nextUnlockAt  time.Time
+
+	// catalogHighWater is the largest state counter this process has seen. It
+	// survives a lock, deliberately: locking is not a reason to forget that the
+	// file was once further ahead than it now claims to be.
+	catalogHighWater int64
 
 	onLock []func()
 }
@@ -157,16 +166,29 @@ func (s *Service) Init(ctx context.Context, password []byte, params crypto.KDFPa
 		return err
 	}
 
-	now := s.clock.Now().UnixMilli()
-	err = s.store.Command(ctx, func(c *command.Queries) error {
+	catalogKey, err := crypto.DeriveSubkey(rootKey, crypto.LabelCatalog)
+	if err != nil {
+		return err
+	}
+	defer crypto.Zero(catalogKey)
+
+	now := s.clock.Now()
+	nowMs := now.UnixMilli()
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		if err := c.InsertVault(ctx, command.InsertVaultParams{
 			VaultID: vaultID, FormatVersion: int64(domain.FormatVersion),
-			ActiveEnvelopeVersion: 1, CreatedAtMs: now, UpdatedAtMs: now,
+			ActiveEnvelopeVersion: 1, CreatedAtMs: nowMs, UpdatedAtMs: nowMs,
 		}); err != nil {
 			return err
 		}
-		env.CreatedAtMs = now
-		return c.InsertKeyEnvelope(ctx, *env)
+		env.CreatedAtMs = nowMs
+		if err := c.InsertKeyEnvelope(ctx, *env); err != nil {
+			return err
+		}
+		// Anchor from birth, so a vault created by this version never needs
+		// the trust-on-first-use bootstrap and has no window in which tampering
+		// would be adopted as the baseline.
+		return catalog.Stamp(ctx, tx, catalogKey, vaultID, 1, now)
 	})
 	if err != nil {
 		return err
@@ -298,6 +320,7 @@ func deriveKeyring(rootKey []byte) (*Keyring, error) {
 		{crypto.LabelSecrets, &kr.Secret},
 		{crypto.LabelAudit, &kr.Audit},
 		{crypto.LabelBackup, &kr.Backup},
+		{crypto.LabelCatalog, &kr.Catalog},
 	} {
 		k, err := crypto.DeriveSubkey(rootKey, d.label)
 		if err != nil {
@@ -366,6 +389,89 @@ func (s *Service) Reset() {
 	s.vault = domain.Vault{}
 }
 
+// VerifyCatalog checks the authenticated vault-state root and reports whether
+// the catalog is what this vault last committed. Call it at unlock, after the
+// record index has loaded.
+//
+// Three outcomes:
+//   - the root matches: normal, nothing to say.
+//   - no anchor exists: a vault created before this table. Trust on first use —
+//     adopt the current state as the baseline and say so. The limitation is
+//     real and worth stating plainly: tampering that happened before this first
+//     unlock is what gets adopted. There is no way around that; the key needed
+//     to have anchored it earlier did not exist on disk to be used.
+//   - the root does not match, or the counter went backwards: fail closed with
+//     ErrIntegrityFailure. The caller panic-locks. It never destroys anything
+//     (invariant 7) — a false positive from a bug of ours must not be fatal to
+//     someone's vault.
+func (s *Service) VerifyCatalog(ctx context.Context) (bootstrapped bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.keyring == nil || !s.vault.IsUnlocked() {
+		return false, shared.ErrVaultLocked
+	}
+	vaultID := s.vault.ID.Bytes()
+	envVersion := s.vault.ActiveEnvelopeVersion
+
+	var (
+		state  catalog.State
+		ok     bool
+		absent bool
+	)
+	err = s.store.Read(ctx, func(tx *sql.Tx) error {
+		var verr error
+		state, ok, verr = catalog.Verify(ctx, tx, s.keyring.Catalog, vaultID, envVersion)
+		if errors.Is(verr, catalog.ErrNoState) {
+			absent = true
+			return nil
+		}
+		return verr
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if absent {
+		if err := s.stampLocked(ctx); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if !ok {
+		return false, shared.ErrIntegrityFailure
+	}
+	// Rollback within one daemon run: the file cannot go back to a counter we
+	// have already seen. Across a restart this memory is gone, which is the
+	// limit of an in-database anchor (see internal/catalog).
+	if state.Counter < s.catalogHighWater {
+		return false, shared.ErrIntegrityFailure
+	}
+	s.catalogHighWater = state.Counter
+	return false, nil
+}
+
+// stampLocked writes the current state as the anchor. Caller holds s.mu.
+func (s *Service) stampLocked(ctx context.Context) error {
+	vaultID := s.vault.ID.Bytes()
+	envVersion := s.vault.ActiveEnvelopeVersion
+	err := s.store.CommandTx(ctx, func(tx *sql.Tx, _ *command.Queries) error {
+		return catalog.Stamp(ctx, tx, s.keyring.Catalog, vaultID, envVersion, s.clock.Now())
+	})
+	if err != nil {
+		return err
+	}
+	var st catalog.State
+	if err := s.store.Read(ctx, func(tx *sql.Tx) error {
+		var lerr error
+		st, lerr = catalog.Load(ctx, tx)
+		return lerr
+	}); err != nil {
+		return err
+	}
+	s.catalogHighWater = st.Counter
+	return nil
+}
+
 // Keys returns the keyring while unlocked. Callers must not retain it across
 // operations; it is invalidated on lock.
 func (s *Service) Keys() (*Keyring, error) {
@@ -427,19 +533,36 @@ func (s *Service) ChangeMasterPassword(ctx context.Context, current, next []byte
 	if err != nil {
 		return err
 	}
-	now := s.clock.Now().UnixMilli()
-	newEnv.CreatedAtMs = now
+	// Derived from the unwrapped root key rather than s.keyring: a password
+	// change re-wraps the root key without changing it, so the catalog subkey
+	// is the same one either way, and this works whether or not the vault
+	// happens to be unlocked.
+	catalogKey, err := crypto.DeriveSubkey(rootKey, crypto.LabelCatalog)
+	if err != nil {
+		return err
+	}
+	defer crypto.Zero(catalogKey)
 
-	err = s.store.Command(ctx, func(c *command.Queries) error {
+	now := s.clock.Now()
+	nowMs := now.UnixMilli()
+	newEnv.CreatedAtMs = nowMs
+
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		if err := c.InsertKeyEnvelope(ctx, *newEnv); err != nil {
 			return err
 		}
 		if err := c.SetActiveEnvelope(ctx, command.SetActiveEnvelopeParams{
-			ActiveEnvelopeVersion: int64(newVersion), UpdatedAtMs: now,
+			ActiveEnvelopeVersion: int64(newVersion), UpdatedAtMs: nowMs,
 		}); err != nil {
 			return err
 		}
-		return c.DeleteKeyEnvelope(ctx, oldVersion)
+		if err := c.DeleteKeyEnvelope(ctx, oldVersion); err != nil {
+			return err
+		}
+		// Re-anchor at the new envelope version. Without this, restoring the
+		// old key_envelopes row would bring the retired password back with no
+		// trace.
+		return catalog.Stamp(ctx, tx, catalogKey, vaultID, newVersion, now)
 	})
 	if err != nil {
 		return err

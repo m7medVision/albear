@@ -35,6 +35,29 @@ func (s *Store) Command(ctx context.Context, fn func(c *command.Queries) error) 
 	})
 }
 
+// CommandTx is Command with the transaction handed to fn as well, so a caller
+// can read its own uncommitted writes. It exists for the vault-state root
+// (internal/catalog), which has to hash the post-mutation catalog and store
+// the result in the same transaction — computing it afterwards would leave a
+// window where a crash strands a stale root and locks out an untouched vault.
+func (s *Store) CommandTx(ctx context.Context, fn func(tx *sql.Tx, c *command.Queries) error) error {
+	return WithTx(ctx, s.DB(), func(tx *sql.Tx) error {
+		return fn(tx, command.New(tx))
+	})
+}
+
+// Read runs fn inside a read transaction, giving a consistent view across
+// several statements. Verification needs it: the catalog must not shift
+// between the rows being hashed and the anchor being read.
+func (s *Store) Read(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return fn(tx)
+}
+
 // Snapshot copies the live database to destPath using VACUUM INTO, which
 // produces a transactionally consistent snapshot (PRD 22.2).
 func (s *Store) Snapshot(ctx context.Context, destPath string) error {

@@ -305,3 +305,23 @@ func (q *Queries) UpdateRecord(ctx context.Context, arg UpdateRecordParams) (int
 	}
 	return result.RowsAffected()
 }
+
+const upsertVaultState = `-- name: UpsertVaultState :exec
+INSERT INTO vault_state (singleton_id, state_counter, state_root, updated_at_ms)
+VALUES (1, ?, ?, ?)
+ON CONFLICT(singleton_id) DO UPDATE SET
+    state_counter = excluded.state_counter,
+    state_root    = excluded.state_root,
+    updated_at_ms = excluded.updated_at_ms
+`
+
+type UpsertVaultStateParams struct {
+	StateCounter int64
+	StateRoot    []byte
+	UpdatedAtMs  int64
+}
+
+func (q *Queries) UpsertVaultState(ctx context.Context, arg UpsertVaultStateParams) error {
+	_, err := q.db.ExecContext(ctx, upsertVaultState, arg.StateCounter, arg.StateRoot, arg.UpdatedAtMs)
+	return err
+}

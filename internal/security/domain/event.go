@@ -31,4 +31,7 @@ const (
 	EventBackupCreated
 	EventBackupRestored
 	EventVaultDestroyed
+	// Append only. These are iota-derived and stored as integers in
+	// security_events, so inserting above would silently relabel history.
+	EventVaultStateBootstrapped
 )

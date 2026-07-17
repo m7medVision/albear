@@ -21,6 +21,7 @@ type Querier interface {
 	UpdateClientLastSeen(ctx context.Context, arg UpdateClientLastSeenParams) error
 	UpdateClientStatus(ctx context.Context, arg UpdateClientStatusParams) (int64, error)
 	UpdateRecord(ctx context.Context, arg UpdateRecordParams) (int64, error)
+	UpsertVaultState(ctx context.Context, arg UpsertVaultStateParams) error
 }
 
 var _ Querier = (*Queries)(nil)

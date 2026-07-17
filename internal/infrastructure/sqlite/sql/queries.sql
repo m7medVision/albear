@@ -59,3 +59,30 @@ SELECT sequence_id, occurred_at_ms, severity, event_code,
 FROM security_events
 ORDER BY sequence_id DESC
 LIMIT ?;
+
+-- Vault-state root inputs. Each is ordered by primary key so the serialization
+-- the HMAC covers is canonical: the same catalog must always hash the same,
+-- whatever order SQLite would otherwise return rows in.
+
+-- name: ListRecordsForRoot :many
+SELECT record_id, revision, key_version, payload_version,
+       metadata_ciphertext, secret_ciphertext
+FROM records
+ORDER BY record_id;
+
+-- name: ListClientsForRoot :many
+SELECT client_id, status, capability_mask,
+       credential_hash, noise_static_pubkey
+FROM clients
+ORDER BY client_id;
+
+-- name: GetActiveEnvelopeDigest :one
+SELECT wrapped_root_key, kdf_salt,
+       kdf_memory_kib, kdf_iterations, kdf_parallelism
+FROM key_envelopes
+WHERE envelope_version = ?;
+
+-- name: GetVaultState :one
+SELECT state_counter, state_root, updated_at_ms
+FROM vault_state
+WHERE singleton_id = 1;

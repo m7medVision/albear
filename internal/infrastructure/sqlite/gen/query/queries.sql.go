@@ -20,6 +20,34 @@ func (q *Queries) CountRecords(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const getActiveEnvelopeDigest = `-- name: GetActiveEnvelopeDigest :one
+SELECT wrapped_root_key, kdf_salt,
+       kdf_memory_kib, kdf_iterations, kdf_parallelism
+FROM key_envelopes
+WHERE envelope_version = ?
+`
+
+type GetActiveEnvelopeDigestRow struct {
+	WrappedRootKey []byte
+	KdfSalt        []byte
+	KdfMemoryKib   int64
+	KdfIterations  int64
+	KdfParallelism int64
+}
+
+func (q *Queries) GetActiveEnvelopeDigest(ctx context.Context, envelopeVersion int64) (GetActiveEnvelopeDigestRow, error) {
+	row := q.db.QueryRowContext(ctx, getActiveEnvelopeDigest, envelopeVersion)
+	var i GetActiveEnvelopeDigestRow
+	err := row.Scan(
+		&i.WrappedRootKey,
+		&i.KdfSalt,
+		&i.KdfMemoryKib,
+		&i.KdfIterations,
+		&i.KdfParallelism,
+	)
+	return i, err
+}
+
 const getClient = `-- name: GetClient :one
 SELECT client_id, client_kind, status, capability_mask,
        credential_hash, noise_static_pubkey,
@@ -126,6 +154,25 @@ func (q *Queries) GetVault(ctx context.Context) (Vault, error) {
 	return i, err
 }
 
+const getVaultState = `-- name: GetVaultState :one
+SELECT state_counter, state_root, updated_at_ms
+FROM vault_state
+WHERE singleton_id = 1
+`
+
+type GetVaultStateRow struct {
+	StateCounter int64
+	StateRoot    []byte
+	UpdatedAtMs  int64
+}
+
+func (q *Queries) GetVaultState(ctx context.Context) (GetVaultStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getVaultState)
+	var i GetVaultStateRow
+	err := row.Scan(&i.StateCounter, &i.StateRoot, &i.UpdatedAtMs)
+	return i, err
+}
+
 const listClients = `-- name: ListClients :many
 SELECT client_id, client_kind, status, capability_mask,
        credential_hash, noise_static_pubkey,
@@ -155,6 +202,50 @@ func (q *Queries) ListClients(ctx context.Context) ([]Client, error) {
 			&i.LabelCiphertext,
 			&i.CreatedAtMs,
 			&i.LastSeenAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listClientsForRoot = `-- name: ListClientsForRoot :many
+SELECT client_id, status, capability_mask,
+       credential_hash, noise_static_pubkey
+FROM clients
+ORDER BY client_id
+`
+
+type ListClientsForRootRow struct {
+	ClientID          []byte
+	Status            int64
+	CapabilityMask    int64
+	CredentialHash    []byte
+	NoiseStaticPubkey []byte
+}
+
+func (q *Queries) ListClientsForRoot(ctx context.Context) ([]ListClientsForRootRow, error) {
+	rows, err := q.db.QueryContext(ctx, listClientsForRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListClientsForRootRow
+	for rows.Next() {
+		var i ListClientsForRootRow
+		if err := rows.Scan(
+			&i.ClientID,
+			&i.Status,
+			&i.CapabilityMask,
+			&i.CredentialHash,
+			&i.NoiseStaticPubkey,
 		); err != nil {
 			return nil, err
 		}
@@ -224,6 +315,56 @@ func (q *Queries) ListRecords(ctx context.Context) ([]Record, error) {
 			&i.SecretNonce,
 			&i.SecretCiphertext,
 			&i.PayloadVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecordsForRoot = `-- name: ListRecordsForRoot :many
+
+SELECT record_id, revision, key_version, payload_version,
+       metadata_ciphertext, secret_ciphertext
+FROM records
+ORDER BY record_id
+`
+
+type ListRecordsForRootRow struct {
+	RecordID           []byte
+	Revision           int64
+	KeyVersion         int64
+	PayloadVersion     int64
+	MetadataCiphertext []byte
+	SecretCiphertext   []byte
+}
+
+// Vault-state root inputs. Each is ordered by primary key so the serialization
+// the HMAC covers is canonical: the same catalog must always hash the same,
+// whatever order SQLite would otherwise return rows in.
+func (q *Queries) ListRecordsForRoot(ctx context.Context) ([]ListRecordsForRootRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRecordsForRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecordsForRootRow
+	for rows.Next() {
+		var i ListRecordsForRootRow
+		if err := rows.Scan(
+			&i.RecordID,
+			&i.Revision,
+			&i.KeyVersion,
+			&i.PayloadVersion,
+			&i.MetadataCiphertext,
+			&i.SecretCiphertext,
 		); err != nil {
 			return nil, err
 		}

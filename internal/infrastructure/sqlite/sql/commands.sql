@@ -72,3 +72,11 @@ INSERT INTO security_events (
     occurred_at_ms, severity, event_code,
     details_nonce, details_ciphertext
 ) VALUES (?, ?, ?, ?, ?);
+
+-- name: UpsertVaultState :exec
+INSERT INTO vault_state (singleton_id, state_counter, state_root, updated_at_ms)
+VALUES (1, ?, ?, ?)
+ON CONFLICT(singleton_id) DO UPDATE SET
+    state_counter = excluded.state_counter,
+    state_root    = excluded.state_root,
+    updated_at_ms = excluded.updated_at_ms;

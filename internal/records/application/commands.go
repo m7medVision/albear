@@ -2,7 +2,9 @@ package application
 
 import (
 	"context"
+	"database/sql"
 
+	"github.com/m7medVision/albear/internal/catalog"
 	"github.com/m7medVision/albear/internal/infrastructure/crypto"
 	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
 	domain "github.com/m7medVision/albear/internal/records/domain"
@@ -40,13 +42,16 @@ func (s *Service) Create(ctx context.Context, t domain.RecordType, meta domain.R
 		return shared.ID{}, err
 	}
 
-	err = s.store.Command(ctx, func(c *command.Queries) error {
-		return c.InsertRecord(ctx, command.InsertRecordParams{
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
+		if err := c.InsertRecord(ctx, command.InsertRecordParams{
 			RecordID: idBytes, KeyVersion: int64(keyVersion), Revision: 1,
 			MetadataNonce: metaNonce, MetadataCiphertext: metaCT,
 			SecretNonce: secNonce, SecretCiphertext: secCT,
 			PayloadVersion: PayloadVersion,
-		})
+		}); err != nil {
+			return err
+		}
+		return s.stamp(ctx, tx, kr)
 	})
 	if err != nil {
 		return shared.ID{}, err
@@ -82,7 +87,7 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 	}
 
 	var rows int64
-	err = s.store.Command(ctx, func(c *command.Queries) error {
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		var err error
 		rows, err = c.UpdateRecord(ctx, command.UpdateRecordParams{
 			Revision:      int64(newRevision),
@@ -91,7 +96,15 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 			PayloadVersion: PayloadVersion,
 			RecordID:       id.Bytes(), Revision_2: int64(expectedRevision),
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		// A revision conflict changed nothing, so there is nothing to
+		// re-stamp; stamping anyway would burn a counter on a no-op.
+		if rows == 0 {
+			return nil
+		}
+		return s.stamp(ctx, tx, kr)
 	})
 	if err != nil {
 		return err
@@ -106,14 +119,21 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 
 // Delete removes a record and its index entry.
 func (s *Service) Delete(ctx context.Context, id shared.ID) error {
-	if _, err := s.keys.Keys(); err != nil {
+	kr, err := s.keys.Keys()
+	if err != nil {
 		return err
 	}
 	var rows int64
-	err := s.store.Command(ctx, func(c *command.Queries) error {
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		var err error
 		rows, err = c.DeleteRecord(ctx, id.Bytes())
-		return err
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return nil
+		}
+		return s.stamp(ctx, tx, kr)
 	})
 	if err != nil {
 		return err
@@ -123,6 +143,17 @@ func (s *Service) Delete(ctx context.Context, id shared.ID) error {
 	}
 	s.index.Remove(id)
 	return nil
+}
+
+// stamp re-anchors the vault state inside the caller's transaction. Deletion
+// is the case that makes this necessary: a removed row leaves every surviving
+// ciphertext valid, so only a hash over the whole set notices it is gone.
+func (s *Service) stamp(ctx context.Context, tx *sql.Tx, kr *KeyringRef) error {
+	vaultID, _, keyVersion, err := s.keys.VaultInfo()
+	if err != nil {
+		return err
+	}
+	return catalog.Stamp(ctx, tx, kr.Catalog, vaultID, keyVersion, s.clock.Now())
 }
 
 // encryptRecord serializes and encrypts both halves with independent fresh

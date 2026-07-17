@@ -304,6 +304,20 @@ func (s *Server) opUnlock(ctx context.Context, st *connState, payload json.RawMe
 		s.recorder.Record(ctx, secdomain.SeverityCritical, secdomain.EventIntegrityFailure, "")
 		return nil, err
 	}
+	// Every payload is authenticated on its own, but only this notices rows
+	// that were removed, reverted, or rolled back wholesale. Same response as
+	// an index failure: lock and record, never destroy (invariant 7).
+	bootstrapped, err := s.vault.VerifyCatalog(ctx)
+	if err != nil {
+		s.vault.PanicLock()
+		s.recorder.Record(ctx, secdomain.SeverityCritical, secdomain.EventIntegrityFailure, "")
+		return nil, err
+	}
+	if bootstrapped {
+		// A vault predating the state table: this unlock defined the baseline.
+		s.log.Info("vault state root established on first unlock", "category", "vault")
+		s.recorder.Record(ctx, secdomain.SeverityInfo, secdomain.EventVaultStateBootstrapped, "")
+	}
 	// Reissue this connection's session at the new epoch (PRD 15.2 step 12).
 	if st.session != nil {
 		fresh, err := s.sessions.Issue(st.clientID, st.session.Capabilities, s.vault.Epoch())

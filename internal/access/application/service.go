@@ -15,6 +15,7 @@ import (
 	"time"
 
 	domain "github.com/m7medVision/albear/internal/access/domain"
+	"github.com/m7medVision/albear/internal/catalog"
 	"github.com/m7medVision/albear/internal/infrastructure/crypto"
 	"github.com/m7medVision/albear/internal/infrastructure/sqlite"
 	"github.com/m7medVision/albear/internal/infrastructure/sqlite/gen/command"
@@ -156,8 +157,8 @@ func (s *Service) Approve(ctx context.Context, pairingID shared.ID) error {
 		return err
 	}
 
-	err = s.store.Command(ctx, func(c *command.Queries) error {
-		return c.InsertClient(ctx, command.InsertClientParams{
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
+		if err := c.InsertClient(ctx, command.InsertClientParams{
 			ClientID:          clientIDBytes,
 			ClientKind:        int64(p.Kind),
 			Status:            int64(domain.StatusApproved),
@@ -167,7 +168,10 @@ func (s *Service) Approve(ctx context.Context, pairingID shared.ID) error {
 			LabelNonce:        labelNonce,
 			LabelCiphertext:   labelCT,
 			CreatedAtMs:       s.clock.Now().UnixMilli(),
-		})
+		}); err != nil {
+			return err
+		}
+		return s.stamp(ctx, tx, kr)
 	})
 	if err != nil {
 		return err
@@ -265,13 +269,26 @@ func (s *Service) List(ctx context.Context) ([]ClientInfo, error) {
 
 // Revoke marks a client revoked: its PSK stops completing handshakes.
 func (s *Service) Revoke(ctx context.Context, clientID shared.ID) error {
+	// Revocation must be anchored: flipping status back to approved in the
+	// database file would otherwise silently reinstate a client the user threw
+	// out, and every row would still verify.
+	kr, err := s.keys.Keys()
+	if err != nil {
+		return err
+	}
 	var rows int64
-	err := s.store.Command(ctx, func(c *command.Queries) error {
+	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		var err error
 		rows, err = c.UpdateClientStatus(ctx, command.UpdateClientStatusParams{
 			Status: int64(domain.StatusRevoked), ClientID: clientID.Bytes(),
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return nil
+		}
+		return s.stamp(ctx, tx, kr)
 	})
 	if err != nil {
 		return err
@@ -280,6 +297,15 @@ func (s *Service) Revoke(ctx context.Context, clientID shared.ID) error {
 		return shared.ErrClientNotFound
 	}
 	return nil
+}
+
+// stamp re-anchors the vault state inside the caller's transaction.
+func (s *Service) stamp(ctx context.Context, tx *sql.Tx, kr *vaultapp.Keyring) error {
+	vaultID, _, keyVersion, err := s.keys.VaultInfo()
+	if err != nil {
+		return err
+	}
+	return catalog.Stamp(ctx, tx, kr.Catalog, vaultID, keyVersion, s.clock.Now())
 }
 
 // Lookup fetches a client for handshake authorization: returns its PSK (the
