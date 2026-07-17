@@ -67,7 +67,8 @@
     },
     "testPathIgnorePatterns": [
       "release/app/dist",
-      ".erb/dll"
+      ".erb/dll",
+      "<rootDir>/src/__tests__/albearMock.ts"
     ],
     "transform": {
       "\\.(ts|tsx|js|jsx)$": "ts-jest"
