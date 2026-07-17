@@ -125,11 +125,16 @@ func Root(ctx context.Context, tx *sql.Tx, key, vaultID []byte, envVersion uint3
 	return mac.Sum(nil), nil
 }
 
-// Stamp advances the counter and rewrites the root. It must be called as the
-// final step inside a mutating transaction, on that transaction: stamping
-// afterwards would leave a window where a crash yields a stale root and locks
-// the user out of a vault nobody attacked.
-func Stamp(ctx context.Context, tx *sql.Tx, key, vaultID []byte, envVersion uint32, now time.Time) error {
+// Stamp advances the counter and rewrites the root, returning the counter it
+// wrote. It must be called as the final step inside a mutating transaction, on
+// that transaction: stamping afterwards would leave a window where a crash
+// yields a stale root and locks the user out of a vault nobody attacked.
+//
+// The returned counter is what callers feed to the in-process high-water mark
+// — but only once the transaction has committed. Noting a counter that never
+// landed would make the next unlock see a lower one and cry rollback over
+// nothing.
+func Stamp(ctx context.Context, tx *sql.Tx, key, vaultID []byte, envVersion uint32, now time.Time) (int64, error) {
 	prev, err := Load(ctx, tx)
 	next := int64(1)
 	switch {
@@ -138,18 +143,21 @@ func Stamp(ctx context.Context, tx *sql.Tx, key, vaultID []byte, envVersion uint
 	case errors.Is(err, ErrNoState):
 		// First stamp on this vault: start at 1.
 	default:
-		return err
+		return 0, err
 	}
 
 	root, err := Root(ctx, tx, key, vaultID, envVersion, next)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return command.New(tx).UpsertVaultState(ctx, command.UpsertVaultStateParams{
+	if err := command.New(tx).UpsertVaultState(ctx, command.UpsertVaultStateParams{
 		StateCounter: next,
 		StateRoot:    root,
 		UpdatedAtMs:  now.UnixMilli(),
-	})
+	}); err != nil {
+		return 0, err
+	}
+	return next, nil
 }
 
 // Load reads the stored anchor, reporting ErrNoState when there is none.

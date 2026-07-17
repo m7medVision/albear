@@ -29,6 +29,13 @@ var (
 
 // WriteFrame writes one length-prefixed frame.
 func WriteFrame(w io.Writer, payload []byte) error {
+	// A zero-length frame is never legitimate: every Noise transport message
+	// carries at least its 16-byte auth tag, and the hello is JSON. Refusing
+	// it here and in ReadFrame keeps a meaningless frame off the wire in both
+	// directions rather than leaving each caller to notice.
+	if len(payload) == 0 {
+		return ErrBadFrame
+	}
 	if len(payload) > MaxFrameSize {
 		return ErrFrameTooLarge
 	}
@@ -49,6 +56,9 @@ func ReadFrame(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	n := binary.BigEndian.Uint32(hdr[:])
+	if n == 0 {
+		return nil, ErrBadFrame
+	}
 	if n > MaxFrameSize {
 		return nil, ErrFrameTooLarge
 	}

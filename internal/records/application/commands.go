@@ -42,6 +42,7 @@ func (s *Service) Create(ctx context.Context, t domain.RecordType, meta domain.R
 		return shared.ID{}, err
 	}
 
+	var stamped int64
 	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		if err := c.InsertRecord(ctx, command.InsertRecordParams{
 			RecordID: idBytes, KeyVersion: int64(keyVersion), Revision: 1,
@@ -51,11 +52,14 @@ func (s *Service) Create(ctx context.Context, t domain.RecordType, meta domain.R
 		}); err != nil {
 			return err
 		}
-		return s.stamp(ctx, tx, kr)
+		var err error
+		stamped, err = s.stamp(ctx, tx, kr)
+		return err
 	})
 	if err != nil {
 		return shared.ID{}, err
 	}
+	s.noteStamped(stamped)
 
 	s.index.Put(&IndexEntry{ID: id, Type: t, Revision: 1, Metadata: meta})
 	return id, nil
@@ -86,7 +90,7 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 		return err
 	}
 
-	var rows int64
+	var rows, stamped int64
 	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		var err error
 		rows, err = c.UpdateRecord(ctx, command.UpdateRecordParams{
@@ -104,7 +108,8 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 		if rows == 0 {
 			return nil
 		}
-		return s.stamp(ctx, tx, kr)
+		stamped, err = s.stamp(ctx, tx, kr)
+		return err
 	})
 	if err != nil {
 		return err
@@ -112,6 +117,7 @@ func (s *Service) Update(ctx context.Context, id shared.ID, expectedRevision uin
 	if rows == 0 {
 		return shared.ErrRevisionConflict
 	}
+	s.noteStamped(stamped)
 
 	s.index.Put(&IndexEntry{ID: id, Type: entry.Type, Revision: newRevision, Metadata: meta})
 	return nil
@@ -123,7 +129,7 @@ func (s *Service) Delete(ctx context.Context, id shared.ID) error {
 	if err != nil {
 		return err
 	}
-	var rows int64
+	var rows, stamped int64
 	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		var err error
 		rows, err = c.DeleteRecord(ctx, id.Bytes())
@@ -133,7 +139,8 @@ func (s *Service) Delete(ctx context.Context, id shared.ID) error {
 		if rows == 0 {
 			return nil
 		}
-		return s.stamp(ctx, tx, kr)
+		stamped, err = s.stamp(ctx, tx, kr)
+		return err
 	})
 	if err != nil {
 		return err
@@ -141,19 +148,32 @@ func (s *Service) Delete(ctx context.Context, id shared.ID) error {
 	if rows == 0 {
 		return shared.ErrRecordNotFound
 	}
+	s.noteStamped(stamped)
 	s.index.Remove(id)
 	return nil
 }
 
-// stamp re-anchors the vault state inside the caller's transaction. Deletion
-// is the case that makes this necessary: a removed row leaves every surviving
-// ciphertext valid, so only a hash over the whole set notices it is gone.
-func (s *Service) stamp(ctx context.Context, tx *sql.Tx, kr *KeyringRef) error {
+// stamp re-anchors the vault state inside the caller's transaction, returning
+// the counter it wrote. Deletion is the case that makes this necessary: a
+// removed row leaves every surviving ciphertext valid, so only a hash over the
+// whole set notices it is gone.
+//
+// The counter goes to the vault's high-water mark via noteStamped, once the
+// caller's transaction has committed.
+func (s *Service) stamp(ctx context.Context, tx *sql.Tx, kr *KeyringRef) (int64, error) {
 	vaultID, _, keyVersion, err := s.keys.VaultInfo()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	return catalog.Stamp(ctx, tx, kr.Catalog, vaultID, keyVersion, s.clock.Now())
+}
+
+// noteStamped records a committed counter. Call it only after the transaction
+// that wrote it succeeded.
+func (s *Service) noteStamped(counter int64) {
+	if counter > 0 {
+		s.keys.NoteCatalogCounter(counter)
+	}
 }
 
 // encryptRecord serializes and encrypts both halves with independent fresh

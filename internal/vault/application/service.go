@@ -174,6 +174,7 @@ func (s *Service) Init(ctx context.Context, password []byte, params crypto.KDFPa
 
 	now := s.clock.Now()
 	nowMs := now.UnixMilli()
+	var stamped int64
 	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		if err := c.InsertVault(ctx, command.InsertVaultParams{
 			VaultID: vaultID, FormatVersion: int64(domain.FormatVersion),
@@ -188,11 +189,14 @@ func (s *Service) Init(ctx context.Context, password []byte, params crypto.KDFPa
 		// Anchor from birth, so a vault created by this version never needs
 		// the trust-on-first-use bootstrap and has no window in which tampering
 		// would be adopted as the baseline.
-		return catalog.Stamp(ctx, tx, catalogKey, vaultID, 1, now)
+		var err error
+		stamped, err = catalog.Stamp(ctx, tx, catalogKey, vaultID, 1, now)
+		return err
 	})
 	if err != nil {
 		return err
 	}
+	s.noteCounterLocked(stamped)
 
 	id, _ := shared.IDFromBytes(vaultID)
 	s.vault = domain.Vault{
@@ -381,12 +385,42 @@ func (s *Service) PanicLock() { s.Lock() }
 
 // Reset locks and forgets the cached vault row so the next operation reloads
 // it from the (possibly replaced) database. Used after backup restore.
+//
+// It also clears the catalog high-water mark. A restore *is* a rollback — the
+// snapshot's counter is behind where this process had got to — but an
+// authorized one: the operator asked for it, and the container was
+// authenticated before a byte of it was installed. Keeping the old mark would
+// make the next unlock call that restore an attack and panic-lock a vault the
+// user had just deliberately recovered.
 func (s *Service) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lockLocked()
 	s.loaded = false
 	s.vault = domain.Vault{}
+	s.catalogHighWater = 0
+}
+
+// NoteCatalogCounter raises the in-process high-water mark. Every mutating
+// write calls it with the counter it stamped, *after* its transaction commits
+// — a counter that never landed would make the next unlock see a lower one and
+// report a rollback that did not happen.
+//
+// This is what gives in-run rollback detection its reach: without it the mark
+// would only advance at unlock, and swapping the file back to a state from
+// earlier in this same session — undoing a revocation performed a minute ago,
+// say — would verify cleanly, because that state really was valid once.
+func (s *Service) NoteCatalogCounter(counter int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noteCounterLocked(counter)
+}
+
+// noteCounterLocked raises the mark. Caller holds s.mu.
+func (s *Service) noteCounterLocked(counter int64) {
+	if counter > s.catalogHighWater {
+		s.catalogHighWater = counter
+	}
 }
 
 // VerifyCatalog checks the authenticated vault-state root and reports whether
@@ -454,21 +488,16 @@ func (s *Service) VerifyCatalog(ctx context.Context) (bootstrapped bool, err err
 func (s *Service) stampLocked(ctx context.Context) error {
 	vaultID := s.vault.ID.Bytes()
 	envVersion := s.vault.ActiveEnvelopeVersion
+	var stamped int64
 	err := s.store.CommandTx(ctx, func(tx *sql.Tx, _ *command.Queries) error {
-		return catalog.Stamp(ctx, tx, s.keyring.Catalog, vaultID, envVersion, s.clock.Now())
+		var err error
+		stamped, err = catalog.Stamp(ctx, tx, s.keyring.Catalog, vaultID, envVersion, s.clock.Now())
+		return err
 	})
 	if err != nil {
 		return err
 	}
-	var st catalog.State
-	if err := s.store.Read(ctx, func(tx *sql.Tx) error {
-		var lerr error
-		st, lerr = catalog.Load(ctx, tx)
-		return lerr
-	}); err != nil {
-		return err
-	}
-	s.catalogHighWater = st.Counter
+	s.noteCounterLocked(stamped)
 	return nil
 }
 
@@ -547,6 +576,7 @@ func (s *Service) ChangeMasterPassword(ctx context.Context, current, next []byte
 	nowMs := now.UnixMilli()
 	newEnv.CreatedAtMs = nowMs
 
+	var stamped int64
 	err = s.store.CommandTx(ctx, func(tx *sql.Tx, c *command.Queries) error {
 		if err := c.InsertKeyEnvelope(ctx, *newEnv); err != nil {
 			return err
@@ -562,11 +592,14 @@ func (s *Service) ChangeMasterPassword(ctx context.Context, current, next []byte
 		// Re-anchor at the new envelope version. Without this, restoring the
 		// old key_envelopes row would bring the retired password back with no
 		// trace.
-		return catalog.Stamp(ctx, tx, catalogKey, vaultID, newVersion, now)
+		var err error
+		stamped, err = catalog.Stamp(ctx, tx, catalogKey, vaultID, newVersion, now)
+		return err
 	})
 	if err != nil {
 		return err
 	}
+	s.noteCounterLocked(stamped)
 
 	s.vault.ActiveEnvelopeVersion = newVersion
 	s.lockLocked()

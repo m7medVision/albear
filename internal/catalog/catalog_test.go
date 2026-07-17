@@ -83,7 +83,8 @@ func seed(t *testing.T, s *sqlite.Store) {
 func stamp(t *testing.T, s *sqlite.Store) {
 	t.Helper()
 	err := s.CommandTx(context.Background(), func(tx *sql.Tx, _ *command.Queries) error {
-		return Stamp(context.Background(), tx, key, vaultID, 1, now)
+		_, err := Stamp(context.Background(), tx, key, vaultID, 1, now)
+		return err
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -374,7 +375,8 @@ func TestForgingTheRootNeedsTheKey(t *testing.T) {
 	attacker := bytes.Repeat([]byte{0x99}, 32)
 	exec(t, s, `DELETE FROM records`)
 	if err := s.CommandTx(ctx, func(tx *sql.Tx, _ *command.Queries) error {
-		return Stamp(ctx, tx, attacker, vaultID, 1, now)
+		_, err := Stamp(ctx, tx, attacker, vaultID, 1, now)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
