@@ -8,6 +8,10 @@ import { unwrap, isCode, VAULT_LOCKED } from '@/lib/api';
 
 export type Phase =
   | 'connecting'
+  | 'service-setup'
+  | 'service-failed'
+  | 'service-missing'
+  | 'service-unsupported'
   | 'unavailable'
   | 'uninitialized'
   | 'locked'
@@ -17,6 +21,7 @@ interface VaultState {
   phase: Phase;
   recordCount?: number;
   refresh: () => Promise<void>;
+  setupDaemonService: () => Promise<void>;
   /**
    * Re-check status if this error means the vault locked under us. Returns
    * true when it handled the error, so callers can skip their own reporting:
@@ -50,14 +55,40 @@ export function VaultProvider({
     try {
       const st = unwrap(await window.albear.status());
       setRecordCount(st.recordCount);
-      if (!st.available) setPhase('unavailable');
-      else if (!st.initialized) setPhase('uninitialized');
-      else if (!st.unlocked) setPhase('locked');
-      else setPhase('unlocked');
+      if (st.available) {
+        if (!st.initialized) setPhase('uninitialized');
+        else if (!st.unlocked) setPhase('locked');
+        else setPhase('unlocked');
+        return;
+      }
+
+      const service = unwrap(await window.albear.daemonServiceStatus());
+      switch (service.state) {
+        case 'stopped':
+          setPhase('service-setup');
+          break;
+        case 'failed':
+          setPhase('service-failed');
+          break;
+        case 'missing':
+          setPhase('service-missing');
+          break;
+        case 'unsupported':
+          setPhase('service-unsupported');
+          break;
+        default:
+          // systemd sees a running service but its socket is not reachable yet.
+          setPhase('unavailable');
+      }
     } catch {
       setPhase('unavailable');
     }
   }, []);
+
+  const setupDaemonService = React.useCallback(async (): Promise<void> => {
+    unwrap(await window.albear.daemonServiceSetup());
+    await refresh();
+  }, [refresh]);
 
   const refreshIfLocked = React.useCallback(
     (err: unknown): boolean => {
@@ -75,14 +106,28 @@ export function VaultProvider({
   // Keep retrying while the daemon is unreachable. Status is exempt from the
   // idle auto-lock timer daemon-side, so polling cannot hold a vault open.
   React.useEffect(() => {
-    if (phase !== 'unavailable' && phase !== 'connecting') return undefined;
+    const retrying: Phase[] = [
+      'connecting',
+      'service-setup',
+      'service-failed',
+      'service-missing',
+      'service-unsupported',
+      'unavailable',
+    ];
+    if (!retrying.includes(phase)) return undefined;
     const timer = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(timer);
   }, [phase, refresh]);
 
   const value = React.useMemo(
-    () => ({ phase, recordCount, refresh, refreshIfLocked }),
-    [phase, recordCount, refresh, refreshIfLocked],
+    () => ({
+      phase,
+      recordCount,
+      refresh,
+      setupDaemonService,
+      refreshIfLocked,
+    }),
+    [phase, recordCount, refresh, setupDaemonService, refreshIfLocked],
   );
 
   return (

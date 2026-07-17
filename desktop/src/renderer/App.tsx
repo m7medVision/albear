@@ -19,17 +19,11 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from '@/components/ui/card';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { UpdateBanner } from '@/components/UpdateBanner';
 import { UnlockCard } from '@/components/UnlockCard';
 import { CreateVaultCard } from '@/components/CreateVaultCard';
+import { DaemonSetupCard } from '@/components/DaemonSetupCard';
 import { VaultProvider, useVault, type Phase } from '@/VaultContext';
 import { RecordsSection } from '@/sections/RecordsSection';
 import { ClientsSection } from '@/sections/ClientsSection';
@@ -50,8 +44,13 @@ function badgeFor(phase: Phase): {
   switch (phase) {
     case 'connecting':
       return { text: 'connecting…', variant: 'outline' };
+    case 'service-setup':
+      return { text: 'setup needed', variant: 'outline' };
+    case 'service-failed':
+    case 'service-missing':
+    case 'service-unsupported':
     case 'unavailable':
-      return { text: 'daemon unreachable', variant: 'destructive' };
+      return { text: 'service unavailable', variant: 'destructive' };
     case 'uninitialized':
       return { text: 'no vault', variant: 'outline' };
     case 'locked':
@@ -152,12 +151,42 @@ function PhaseScreen(): React.ReactElement | null {
     );
   }
 
-  if (phase === 'unavailable') {
+  if (phase === 'service-setup') return <DaemonSetupCard />;
+
+  if (
+    phase === 'service-failed' ||
+    phase === 'service-missing' ||
+    phase === 'service-unsupported' ||
+    phase === 'unavailable'
+  ) {
+    const recovery = {
+      'service-failed': {
+        title: 'The Albear service did not start',
+        detail:
+          'Check the user service with systemctl --user status albear-vaultd, then retry.',
+      },
+      'service-missing': {
+        title: 'Albear core is not installed',
+        detail:
+          'Install the matching albear core package, which provides vaultd and its user service, then retry.',
+      },
+      'service-unsupported': {
+        title: 'Automatic service setup is unavailable',
+        detail:
+          'This system has no reachable systemd user manager. Start vaultd for your user, then retry.',
+      },
+      unavailable: {
+        title: 'Cannot reach the Albear service',
+        detail:
+          'The service appears to be running, but its local socket is not ready. Wait a moment and retry.',
+      },
+    }[phase];
+
     return (
       <Alert variant="destructive">
-        <AlertTitle>Cannot reach the vault daemon</AlertTitle>
-        <AlertDescription className="flex flex-col gap-2">
-          <span>is vaultd running? Start it in a terminal, then retry.</span>
+        <AlertTitle>{recovery.title}</AlertTitle>
+        <AlertDescription className="flex flex-col gap-3">
+          <span>{recovery.detail}</span>
           <Button
             variant="secondary"
             size="sm"

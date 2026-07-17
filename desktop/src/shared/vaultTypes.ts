@@ -32,6 +32,20 @@ export interface DesktopStatus {
   recordCount?: number;
 }
 
+/** Bounded view of the fixed per-user daemon service. */
+export type DaemonServiceState =
+  | 'running'
+  | 'stopped'
+  | 'failed'
+  | 'missing'
+  | 'unsupported';
+
+export interface DaemonServiceStatus {
+  state: DaemonServiceState;
+  /** Whether systemd has configured the unit to start at user sign-in. */
+  enabled?: boolean;
+}
+
 /** The three record types the daemon accepts (internal/records/domain). */
 export type RecordType = 'login' | 'note' | 'api';
 

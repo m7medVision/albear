@@ -16,6 +16,8 @@ import MenuBuilder from './menu';
 import { isSafeExternalUrl, resolveHtmlPath } from './util';
 import { VaultClient } from './vaultClient';
 import { registerVaultIpc } from './ipc';
+import { shouldUseDesktopAutoUpdater } from './updater';
+import { registerDaemonServiceIpc } from './daemonServiceIpc';
 
 /**
  * Auto-updates. Checks GitHub releases (electron-builder `publish` config),
@@ -24,8 +26,9 @@ import { registerVaultIpc } from './ipc';
  */
 class AppUpdater {
   constructor(window: BrowserWindow) {
-    // Fail silently in development / unpackaged builds.
-    if (!app.isPackaged) return;
+    // AppImage owns its own file and can safely self-update. deb/rpm installs
+    // are package-manager-owned and must be upgraded through that manager.
+    if (!shouldUseDesktopAutoUpdater(app.isPackaged)) return;
 
     log.transports.file.level = 'info';
     autoUpdater.logger = log;
@@ -68,6 +71,7 @@ let mainWindow: BrowserWindow | null = null;
 // first request and reconnects on demand, so construction is safe here.
 const vaultClient = new VaultClient();
 registerVaultIpc(vaultClient);
+registerDaemonServiceIpc();
 
 ipcMain.on('updater:quit-and-install', () => {
   if (app.isPackaged) {
