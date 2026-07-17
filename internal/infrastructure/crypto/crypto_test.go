@@ -3,6 +3,7 @@ package crypto
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	"golang.org/x/crypto/argon2"
@@ -75,6 +76,43 @@ func TestDeriveKEKEnforcesMinimums(t *testing.T) {
 	}
 	if _, err := DeriveKEK([]byte("pw"), salt[:8], KDFParams{MemoryKiB: MinMemoryKiB, Iterations: 3, Parallelism: 1}); err == nil {
 		t.Fatal("short salt accepted")
+	}
+}
+
+// TestKDFParamsEnforcesMaximums: cost parameters come back from the key
+// envelope on every unlock, so an oversized row must be rejected before
+// Argon2 tries to allocate what it asks for.
+func TestKDFParamsEnforcesMaximums(t *testing.T) {
+	excessive := []KDFParams{
+		{MemoryKiB: MaxMemoryKiB + 1, Iterations: 3, Parallelism: 4},
+		{MemoryKiB: 128 * 1024, Iterations: MaxIterations + 1, Parallelism: 4},
+		{MemoryKiB: 128 * 1024, Iterations: 3, Parallelism: MaxParallelism + 1},
+		// What a tampered envelope would plausibly look like: 64 GiB.
+		{MemoryKiB: 64 * 1024 * 1024, Iterations: 3, Parallelism: 4},
+	}
+	for _, p := range excessive {
+		if err := p.Validate(); !errors.Is(err, ErrExcessiveKDFParams) {
+			t.Fatalf("params %+v accepted above maximum: %v", p, err)
+		}
+		// DeriveKEK must refuse without ever reaching argon2.IDKey.
+		if _, err := DeriveKEK([]byte("pw"), mustRandom(t, SaltSize), p); !errors.Is(err, ErrExcessiveKDFParams) {
+			t.Fatalf("DeriveKEK ran with %+v: %v", p, err)
+		}
+	}
+}
+
+// TestKDFParamsAcceptsDefaults keeps the bounds honest: the shipped profile
+// and the extremes of the permitted range must all validate.
+func TestKDFParamsAcceptsDefaults(t *testing.T) {
+	ok := []KDFParams{
+		DefaultKDFParams,
+		{MemoryKiB: MinMemoryKiB, Iterations: MinIterations, Parallelism: 1},
+		{MemoryKiB: MaxMemoryKiB, Iterations: MaxIterations, Parallelism: MaxParallelism},
+	}
+	for _, p := range ok {
+		if err := p.Validate(); err != nil {
+			t.Fatalf("params %+v rejected: %v", p, err)
+		}
 	}
 }
 

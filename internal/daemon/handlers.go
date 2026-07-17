@@ -14,6 +14,7 @@ import (
 	recdomain "github.com/m7medVision/albear/internal/records/domain"
 	secdomain "github.com/m7medVision/albear/internal/security/domain"
 	shared "github.com/m7medVision/albear/internal/shared/domain"
+	vaultdomain "github.com/m7medVision/albear/internal/vault/domain"
 )
 
 // connState is the per-connection authorization context.
@@ -278,8 +279,8 @@ func (s *Server) opInit(ctx context.Context, payload json.RawMessage) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	if len(p.Password) < 8 {
-		return nil, shared.ErrValidation
+	if err := vaultdomain.CheckPasswordStrength(p.Password); err != nil {
+		return nil, err
 	}
 	if err := s.vault.Init(ctx, []byte(p.Password), s.kdfParams); err != nil {
 		return nil, err
@@ -319,8 +320,8 @@ func (s *Server) opChangePassword(ctx context.Context, payload json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
-	if len(p.Next) < 8 {
-		return nil, shared.ErrValidation
+	if err := vaultdomain.CheckPasswordStrength(p.Next); err != nil {
+		return nil, err
 	}
 	if err := s.vault.ChangeMasterPassword(ctx, []byte(p.Current), []byte(p.Next), s.kdfParams); err != nil {
 		return nil, err

@@ -19,6 +19,17 @@ const (
 	MinIterations = 3
 )
 
+// Hard maximums. Cost parameters are read back from the key envelope on every
+// unlock, so a tampered row could otherwise name 64 GiB of memory and turn an
+// unlock attempt into an out-of-memory kill. These bounds sit far above the
+// default profile (128 MiB / 3 / 4) and above any plausible hardening of it,
+// so they cost a legitimate vault nothing.
+const (
+	MaxMemoryKiB   = 1 << 20 // 1 GiB
+	MaxIterations  = 20
+	MaxParallelism = 16
+)
+
 // DefaultKDFParams is the initial profile: 128 MiB, 3 iterations, 4 lanes.
 var DefaultKDFParams = KDFParams{
 	MemoryKiB:   128 * 1024,
@@ -28,9 +39,20 @@ var DefaultKDFParams = KDFParams{
 
 var ErrWeakKDFParams = errors.New("crypto: KDF parameters below hard minimum")
 
+// ErrExcessiveKDFParams is returned for parameters above the hard maximums.
+// It is separate from ErrWeakKDFParams because the causes differ: too weak
+// means a bad profile, too large means the envelope is not to be trusted.
+var ErrExcessiveKDFParams = errors.New("crypto: KDF parameters above hard maximum")
+
+// Validate bounds the cost parameters from both sides. DeriveKEK calls it
+// before touching Argon2, so unlock, password change, and verification all
+// inherit the guard against a tampered envelope.
 func (p KDFParams) Validate() error {
 	if p.MemoryKiB < MinMemoryKiB || p.Iterations < MinIterations || p.Parallelism < 1 {
 		return ErrWeakKDFParams
+	}
+	if p.MemoryKiB > MaxMemoryKiB || p.Iterations > MaxIterations || p.Parallelism > MaxParallelism {
+		return ErrExcessiveKDFParams
 	}
 	return nil
 }

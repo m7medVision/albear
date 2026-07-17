@@ -346,6 +346,50 @@ func TestWrongPasswordAndRateLimit(t *testing.T) {
 	}
 }
 
+// TestPasswordPolicyGatesInitAndChange: the strength policy is the only thing
+// standing between a guessable master password and the whole vault, so it must
+// apply at both entry points.
+func TestPasswordPolicyGatesInitAndChange(t *testing.T) {
+	d := startDaemon(t)
+	c := cliConn(t, d)
+
+	weak := []string{"hunter2", "password1234", "abcdefghijkm", "aaaaaaaaaaaaaaaa"}
+	for _, pw := range weak {
+		err := c.Call("vault.init", map[string]string{"password": pw}, nil)
+		if apiCode(t, err) != protocol.CodeWeakPassword {
+			t.Fatalf("init accepted %q: %v", pw, err)
+		}
+	}
+	// Nothing was created by a rejected init.
+	var status struct {
+		Initialized bool `json:"initialized"`
+	}
+	if err := c.Call("vault.status", nil, &status); err != nil || status.Initialized {
+		t.Fatalf("weak init created a vault: %+v %v", status, err)
+	}
+
+	initAndUnlock(t, c)
+
+	// The same floor applies on change, and a rejected change leaves the
+	// current password working.
+	for _, pw := range weak {
+		err := c.Call("vault.changePassword", map[string]string{
+			"current": "master password", "next": pw,
+		}, nil)
+		if apiCode(t, err) != protocol.CodeWeakPassword {
+			t.Fatalf("change accepted %q: %v", pw, err)
+		}
+	}
+	if err := c.Call("records.list", nil, nil); err != nil {
+		t.Fatalf("rejected change disturbed the vault: %v", err)
+	}
+	if err := c.Call("vault.changePassword", map[string]string{
+		"current": "master password", "next": "a genuinely long passphrase",
+	}, nil); err != nil {
+		t.Fatalf("strong passphrase rejected: %v", err)
+	}
+}
+
 func TestPairingFlowEndToEnd(t *testing.T) {
 	d := startDaemon(t)
 	cli := cliConn(t, d)

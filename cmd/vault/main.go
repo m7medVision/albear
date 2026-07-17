@@ -181,7 +181,7 @@ func exitCodeFor(err error) int {
 			return exitIntegrity
 		case protocol.CodeConflict:
 			return exitConflict
-		case protocol.CodeInvalid:
+		case protocol.CodeInvalid, protocol.CodeWeakPassword:
 			return exitUsage
 		}
 		return exitInternal
