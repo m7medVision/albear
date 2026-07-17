@@ -1,6 +1,7 @@
 /**
  * @jest-environment node
  */
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -20,6 +21,27 @@ const REQUIRED_DEB_RUNTIME = [
   'libuuid1',
   'libsecret-1-0',
 ];
+function packageVersionForRelease(tag: string): string {
+  const helper = path.join(
+    __dirname,
+    '..',
+    '..',
+    'scripts',
+    'package-version.sh',
+  );
+  return execFileSync(
+    'bash',
+    [
+      '-c',
+      'source "$1"; package_version_for_release "$2"',
+      'bash',
+      helper,
+      tag,
+    ],
+    { encoding: 'utf8' },
+  ).trim();
+}
+
 const REQUIRED_RPM_RUNTIME = [
   'gtk3',
   'libnotify',
@@ -32,6 +54,11 @@ const REQUIRED_RPM_RUNTIME = [
 ];
 
 describe('Linux desktop package configuration', () => {
+  it('normalizes package versions without expanding tilde to the runner home', () => {
+    expect(packageVersionForRelease('v0.2.0')).toBe('0.2.0');
+    expect(packageVersionForRelease('v0.2.0-rc.1')).toBe('0.2.0~rc.1');
+  });
+
   it('builds only x64 AppImage, deb, and rpm targets with distinct names', () => {
     expect(build.linux.target).toEqual([
       { target: 'AppImage', arch: ['x64'] },
