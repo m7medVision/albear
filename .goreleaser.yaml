@@ -90,6 +90,13 @@ nfpms:
 #         "${pkgdir}/usr/lib/systemd/user/albear-vaultd.service"
 #       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/albear-bin/LICENSE"
 
+# Git's version sort is prerelease-blind unless versionsort.suffix is set, so a
+# commit carrying both vX.Y.Z and vX.Y.Z-rc.N sorts the rc higher. Promotion
+# (`git push origin main:stable`) always produces exactly that pair. This also
+# corrects *previous*-tag selection, which GORELEASER_CURRENT_TAG does not cover.
+git:
+  prerelease_suffix: "-"
+
 changelog:
   use: github-native
 
