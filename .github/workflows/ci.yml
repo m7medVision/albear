@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           # go covers the whole Go tree; generated is the narrow set that can
           # make sqlc output or the Noise vectors drift (see its own job).
