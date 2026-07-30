@@ -852,6 +852,48 @@ func TestRevealForOriginPolicy(t *testing.T) {
 	}
 }
 
+// TestRevealForOriginLoopbackAllowsHTTP: local dev servers run on plain HTTP.
+// Loopback is the only origin category where that's allowed, and it's the
+// daemon's own parse of the origin that decides it — the client never sends
+// an "allow insecure" flag of any kind.
+func TestRevealForOriginLoopbackAllowsHTTP(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+
+	var created struct {
+		ID string `json:"id"`
+	}
+	cli.Call("records.create", map[string]any{
+		"name": "Dev", "username": "mo",
+		"urls": []string{"http://localhost:3000"}, "password": "pw",
+	}, &created)
+
+	var out struct {
+		Password string `json:"password"`
+	}
+	if err := cli.Call("records.revealForOrigin", map[string]string{
+		"id": created.ID, "origin": "http://localhost:3000",
+	}, &out); err != nil || out.Password != "pw" {
+		t.Fatalf("loopback http reveal: %+v %v", out, err)
+	}
+
+	// A real, non-loopback record over HTTP stays denied.
+	var real struct {
+		ID string `json:"id"`
+	}
+	cli.Call("records.create", map[string]any{
+		"name": "Real", "username": "mo",
+		"urls": []string{"http://example.com"}, "password": "pw",
+	}, &real)
+	err := cli.Call("records.revealForOrigin", map[string]string{
+		"id": real.ID, "origin": "http://example.com",
+	}, nil)
+	if apiCode(t, err) != protocol.CodeDenied {
+		t.Fatal("http reveal allowed on a non-loopback origin")
+	}
+}
+
 // TestRevealForOriginSubdomainOptIn: the opt-in is read from the stored record
 // daemon-side (invariant 9). A client never sends a policy, so a compromised
 // one cannot widen its own matching.

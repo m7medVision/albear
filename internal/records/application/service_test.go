@@ -301,17 +301,44 @@ func TestRevealForOrigin(t *testing.T) {
 		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
 
 	// Matching https origin succeeds.
-	p, err := e.records.RevealForOrigin(ctx, id, "https://github.com", false)
+	p, err := e.records.RevealForOrigin(ctx, id, "https://github.com")
 	if err != nil || string(p.Password.Expose()) != "pw" {
 		t.Fatal(err)
 	}
 	// Non-matching origin denied.
-	if _, err := e.records.RevealForOrigin(ctx, id, "https://evil.example", false); !errors.Is(err, shared.ErrAuthorizationDeny) {
+	if _, err := e.records.RevealForOrigin(ctx, id, "https://evil.example"); !errors.Is(err, shared.ErrAuthorizationDeny) {
 		t.Fatal("cross-origin reveal allowed")
 	}
-	// HTTP denied by default, allowed with explicit override IF matching.
-	if _, err := e.records.RevealForOrigin(ctx, id, "http://github.com", false); !errors.Is(err, shared.ErrAuthorizationDeny) {
-		t.Fatal("http reveal allowed by default")
+	// HTTP denied on a real (non-loopback) origin, matching or not.
+	if _, err := e.records.RevealForOrigin(ctx, id, "http://github.com"); !errors.Is(err, shared.ErrAuthorizationDeny) {
+		t.Fatal("http reveal allowed on a non-loopback origin")
+	}
+}
+
+// TestRevealForOriginLoopbackAllowsHTTP: local dev servers run on plain HTTP,
+// and nothing outside this machine can make a browser tab's real origin
+// report as loopback — so the daemon relaxes the HTTPS requirement for
+// loopback and only loopback, computed from the origin it parses itself.
+func TestRevealForOriginLoopbackAllowsHTTP(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	id, _ := e.records.Create(ctx, domain.TypeLogin, loginMeta(t, "Dev", "mo", "http://localhost:3000"),
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
+
+	p, err := e.records.RevealForOrigin(ctx, id, "http://localhost:3000")
+	if err != nil || string(p.Password.Expose()) != "pw" {
+		t.Fatalf("loopback http reveal: %+v %v", p, err)
+	}
+	// A different loopback port is still a different origin — loopback only
+	// relaxes the scheme requirement, not exact-origin matching itself.
+	if _, err := e.records.RevealForOrigin(ctx, id, "http://localhost:4000"); !errors.Is(err, shared.ErrAuthorizationDeny) {
+		t.Fatal("loopback reveal matched a different port")
+	}
+	// A real, non-loopback record over HTTP is still denied.
+	realID, _ := e.records.Create(ctx, domain.TypeLogin, loginMeta(t, "Real", "mo", "http://example.com"),
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
+	if _, err := e.records.RevealForOrigin(ctx, realID, "http://example.com"); !errors.Is(err, shared.ErrAuthorizationDeny) {
+		t.Fatal("http reveal allowed on a non-loopback origin")
 	}
 }
 

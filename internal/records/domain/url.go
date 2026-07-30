@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"net"
 	"net/url"
 	"strings"
 
@@ -34,18 +35,25 @@ func ParseOrigin(raw string) (CanonicalOrigin, error) {
 	if host == "" {
 		return CanonicalOrigin{}, shared.ErrValidation
 	}
-	// Internationalized domain normalization: everything is compared in
-	// punycode ASCII form so Unicode lookalikes cannot alias an ASCII host.
-	ascii, err := idna.Lookup.ToASCII(host)
-	if err != nil {
-		return CanonicalOrigin{}, shared.ErrValidation
-	}
-	// Re-check emptiness after mapping, not just before it. IDNA maps some
-	// code points to nothing at all — "http://­" (a lone soft hyphen) has
-	// a non-empty host going in and an empty one coming out — and an origin
-	// with no host would compare equal to any other host-less origin.
-	if ascii == "" {
-		return CanonicalOrigin{}, shared.ErrValidation
+	// IP literals — including a bracketed IPv6 address, which url.Hostname
+	// already stripped down to "::1" — are not domain names. IDNA disallows
+	// the colons in an IPv6 literal outright, so route address hosts around
+	// it instead of through it.
+	ascii := host
+	if net.ParseIP(host) == nil {
+		// Internationalized domain normalization: everything is compared in
+		// punycode ASCII form so Unicode lookalikes cannot alias an ASCII host.
+		ascii, err = idna.Lookup.ToASCII(host)
+		if err != nil {
+			return CanonicalOrigin{}, shared.ErrValidation
+		}
+		// Re-check emptiness after mapping, not just before it. IDNA maps some
+		// code points to nothing at all — "http://­" (a lone soft hyphen) has
+		// a non-empty host going in and an empty one coming out — and an origin
+		// with no host would compare equal to any other host-less origin.
+		if ascii == "" {
+			return CanonicalOrigin{}, shared.ErrValidation
+		}
 	}
 	port := u.Port()
 	if port == "" {
@@ -69,6 +77,24 @@ func (o CanonicalOrigin) String() string {
 // IsSecure reports whether the origin uses https. HTTP filling is disabled by
 // default and requires an explicit per-site override at a higher layer.
 func (o CanonicalOrigin) IsSecure() bool { return o.Scheme == "https" }
+
+// IsLoopback reports whether the host is literal loopback: "localhost", or an
+// IP literal in 127.0.0.0/8 or ::1. Port is irrelevant — loopback is loopback
+// on any port.
+//
+// This is deliberately narrow. Private LAN IPs and custom local hostnames
+// (*.test, *.local) are excluded: nothing outside this machine can ever make
+// a browser tab's real origin report as literal loopback, which is what makes
+// it the only origin category safe to relax matching for.
+func (o CanonicalOrigin) IsLoopback() bool {
+	if o.Host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(o.Host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
 
 // RegistrableDomain returns the eTLD+1 of the host ("www.github.com" →
 // "github.com"). IP addresses and single-label hosts return the host itself.

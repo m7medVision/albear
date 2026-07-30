@@ -139,8 +139,10 @@ func (s *Service) Reveal(ctx context.Context, id shared.ID) (domain.SecretPayloa
 
 // RevealForOrigin releases a secret only when the record actually matches the
 // requesting page origin — the constrained reveal the extension gets
-// (PRD 13.4, 18.2). HTTP origins are refused unless explicitly allowed.
-func (s *Service) RevealForOrigin(ctx context.Context, id shared.ID, rawOrigin string, allowInsecure bool) (domain.SecretPayload, error) {
+// (PRD 13.4, 18.2). HTTP origins are refused unless the origin is loopback:
+// that is computed here, from the origin this method itself parses, never
+// taken as a parameter a caller could set.
+func (s *Service) RevealForOrigin(ctx context.Context, id shared.ID, rawOrigin string) (domain.SecretPayload, error) {
 	if _, err := s.keys.Keys(); err != nil {
 		return domain.SecretPayload{}, err
 	}
@@ -148,7 +150,7 @@ func (s *Service) RevealForOrigin(ctx context.Context, id shared.ID, rawOrigin s
 	if err != nil {
 		return domain.SecretPayload{}, err
 	}
-	if !origin.IsSecure() && !allowInsecure {
+	if !origin.IsSecure() && !origin.IsLoopback() {
 		return domain.SecretPayload{}, shared.ErrAuthorizationDeny
 	}
 	e, ok := s.index.Get(id)

@@ -456,7 +456,7 @@ func (s *Server) opRevealForOrigin(ctx context.Context, payload json.RawMessage)
 	if err != nil {
 		return nil, shared.ErrValidation
 	}
-	secret, err := s.records.RevealForOrigin(ctx, id, p.Origin, false)
+	secret, err := s.records.RevealForOrigin(ctx, id, p.Origin)
 	if err != nil {
 		return nil, err
 	}

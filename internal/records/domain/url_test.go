@@ -22,6 +22,8 @@ func TestParseOriginCanonicalizes(t *testing.T) {
 		{"http://example.com:8080/x", "http", "example.com", "8080"},
 		{"http://example.com", "http", "example.com", "80"},
 		{"https://münchen.de", "https", "xn--mnchen-3ya.de", "443"},
+		{"http://127.0.0.1:3000", "http", "127.0.0.1", "3000"},
+		{"http://[::1]:8080", "http", "::1", "8080"},
 	}
 	for _, c := range cases {
 		o := mustOrigin(t, c.raw)
@@ -152,6 +154,35 @@ func TestLoginURLCarriesItsOwnPolicy(t *testing.T) {
 	}
 	if loose.Matches(mustOrigin(t, "https://evilgithub.com")) {
 		t.Fatal("an opted-in login URL matched a lookalike")
+	}
+}
+
+// TestIsLoopback: the only addresses nothing outside this machine can make a
+// browser tab report as its real origin. Everything else — private LAN IPs,
+// custom local hostnames — is deliberately excluded; see the loopback-only
+// ADR once written.
+func TestIsLoopback(t *testing.T) {
+	for _, raw := range []string{
+		"http://localhost",
+		"https://localhost:5173",
+		"http://127.0.0.1:3000",
+		"http://127.5.9.1:3000",
+		"http://[::1]:8080",
+	} {
+		if !mustOrigin(t, raw).IsLoopback() {
+			t.Fatalf("%s should be loopback", raw)
+		}
+	}
+	for _, raw := range []string{
+		"https://example.com",
+		"http://192.168.1.5:3000",
+		"http://10.0.0.1",
+		"https://localhost.example.com",
+		"https://notlocalhost",
+	} {
+		if mustOrigin(t, raw).IsLoopback() {
+			t.Fatalf("%s should not be loopback", raw)
+		}
 	}
 }
 
