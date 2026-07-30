@@ -109,3 +109,17 @@ func (r *Record) MatchesOrigin(page CanonicalOrigin) bool {
 	}
 	return false
 }
+
+// MatchesProjectID reports whether the record's ProjectID exactly equals the
+// one a page presents — a narrow, deliberate carve-out of exact-origin
+// matching that only ever engages on a loopback origin. It exists so a dev
+// credential can match a project regardless of which port it happens to be
+// running on, something URL matching cannot do. Nothing outside this machine
+// can ever make a browser tab's real origin report as loopback, which is what
+// keeps this from widening matching for a real site.
+func (r *Record) MatchesProjectID(page CanonicalOrigin, projectID string) bool {
+	if projectID == "" || r.Metadata.ProjectID == "" {
+		return false
+	}
+	return page.IsLoopback() && r.Metadata.ProjectID == projectID
+}

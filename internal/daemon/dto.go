@@ -76,11 +76,16 @@ type queryPayload struct {
 
 type originPayload struct {
 	Origin string `json:"origin"`
+	// ProjectID only ever has an effect when Origin turns out to be loopback
+	// once parsed daemon-side — never trusted or interpreted as a claim about
+	// the origin itself.
+	ProjectID string `json:"projectId,omitempty"`
 }
 
 type revealForOriginPayload struct {
-	ID     string `json:"id"`
-	Origin string `json:"origin"`
+	ID        string `json:"id"`
+	Origin    string `json:"origin"`
+	ProjectID string `json:"projectId,omitempty"`
 }
 
 type generatePayload struct {
@@ -129,6 +134,10 @@ type recordView struct {
 	ProjectID   string          `json:"projectId,omitempty"`
 	CreatedAtMs int64           `json:"createdAtMs"`
 	UpdatedAtMs int64           `json:"updatedAtMs"`
+	// MatchedBy is set only by records.match: why this entry was returned —
+	// "origin" or "project" (records/application.MatchReason). Absent from
+	// list/search/show, which have no match to explain.
+	MatchedBy string `json:"matchedBy,omitempty"`
 }
 
 func toRecordView(e *recordsapp.IndexEntry) recordView {
@@ -152,6 +161,16 @@ func toRecordViews(entries []*recordsapp.IndexEntry) []recordView {
 	out := make([]recordView, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, toRecordView(e))
+	}
+	return out
+}
+
+func toMatchViews(results []recordsapp.MatchResult) []recordView {
+	out := make([]recordView, 0, len(results))
+	for _, r := range results {
+		v := toRecordView(r.Entry)
+		v.MatchedBy = string(r.Reason)
+		out = append(out, v)
 	}
 	return out
 }

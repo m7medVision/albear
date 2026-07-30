@@ -125,6 +125,35 @@ func TestMatchesOriginPerURLPolicy(t *testing.T) {
 	}
 }
 
+// TestMatchesProjectID: the carve-out only ever engages on loopback, and only
+// when both sides of the equality actually have something to compare —
+// invariant 9's exact-origin rule stays untouched everywhere else.
+func TestMatchesProjectID(t *testing.T) {
+	r := validLogin(t)
+	r.Metadata.ProjectID = "my-app"
+
+	loopback, _ := ParseOrigin("http://localhost:3000")
+	if !r.MatchesProjectID(loopback, "my-app") {
+		t.Fatal("matching project id on loopback should match")
+	}
+	if r.MatchesProjectID(loopback, "other-app") {
+		t.Fatal("a different project id matched")
+	}
+	if r.MatchesProjectID(loopback, "") {
+		t.Fatal("an empty presented project id matched")
+	}
+
+	real, _ := ParseOrigin("https://example.com")
+	if r.MatchesProjectID(real, "my-app") {
+		t.Fatal("a non-loopback origin matched by project id")
+	}
+
+	unset := validLogin(t)
+	if unset.MatchesProjectID(loopback, "my-app") {
+		t.Fatal("a record with no ProjectID matched anyway")
+	}
+}
+
 func TestSecretPayloadWipe(t *testing.T) {
 	p := SecretPayload{
 		Password:     shared.NewSecretFromString("pw"),

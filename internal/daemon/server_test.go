@@ -939,6 +939,78 @@ func TestProjectIDFieldRoundTripsOverSocket(t *testing.T) {
 	}
 }
 
+// TestMatchAndRevealByProjectIDOverSocket: the full #30 path over the real
+// encrypted connection — a record with no URL at all is findable and
+// fillable purely by project id, but only on loopback, and the daemon (never
+// the client) reports why each match result matched.
+func TestMatchAndRevealByProjectIDOverSocket(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := cli.Call("records.create", map[string]any{
+		"name": "Dev", "username": "mo", "password": "pw",
+		"projectId": "my-app",
+	}, &created); err != nil {
+		t.Fatal(err)
+	}
+
+	var matched struct {
+		Records []struct {
+			ID        string `json:"id"`
+			MatchedBy string `json:"matchedBy"`
+		} `json:"records"`
+	}
+	if err := cli.Call("records.match", map[string]string{
+		"origin": "http://localhost:3000", "projectId": "my-app",
+	}, &matched); err != nil {
+		t.Fatal(err)
+	}
+	if len(matched.Records) != 1 || matched.Records[0].ID != created.ID {
+		t.Fatalf("project-id match: %+v", matched.Records)
+	}
+	if matched.Records[0].MatchedBy != "project" {
+		t.Fatalf("matchedBy not reported as project: %+v", matched.Records[0])
+	}
+
+	// Off loopback, the same project id finds nothing — it has no effect at
+	// all once the origin isn't loopback.
+	if err := cli.Call("records.match", map[string]string{
+		"origin": "https://example.com", "projectId": "my-app",
+	}, &matched); err != nil {
+		t.Fatal(err)
+	}
+	if len(matched.Records) != 0 {
+		t.Fatalf("project id matched a non-loopback origin: %+v", matched.Records)
+	}
+
+	// Reveal follows the same rule: fillable over HTTP on loopback by project
+	// id alone, with no URL on the record at all.
+	var out struct {
+		Password string `json:"password"`
+	}
+	if err := cli.Call("records.revealForOrigin", map[string]string{
+		"id": created.ID, "origin": "http://localhost:3000", "projectId": "my-app",
+	}, &out); err != nil || out.Password != "pw" {
+		t.Fatalf("project-id reveal: %+v %v", out, err)
+	}
+	err := cli.Call("records.revealForOrigin", map[string]string{
+		"id": created.ID, "origin": "http://localhost:3000", "projectId": "wrong-app",
+	}, nil)
+	if apiCode(t, err) != protocol.CodeDenied {
+		t.Fatal("wrong project id allowed a reveal")
+	}
+	err = cli.Call("records.revealForOrigin", map[string]string{
+		"id": created.ID, "origin": "https://example.com", "projectId": "my-app",
+	}, nil)
+	if apiCode(t, err) != protocol.CodeDenied {
+		t.Fatal("project id authorized a reveal on a non-loopback origin")
+	}
+}
+
 // TestRevealForOriginSubdomainOptIn: the opt-in is read from the stored record
 // daemon-side (invariant 9). A client never sends a policy, so a compromised
 // one cannot widen its own matching.

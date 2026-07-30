@@ -206,21 +206,24 @@ func TestMatchOrigins(t *testing.T) {
 	e.records.Create(ctx, domain.TypeLogin, loginMeta(t, "GitHub", "mo", "https://github.com"),
 		domain.SecretPayload{Password: shared.NewSecretFromString("x")})
 
-	hits, err := e.records.Match("https://github.com/login")
+	hits, err := e.records.Match("https://github.com/login", "")
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("exact origin: %d %v", len(hits), err)
 	}
+	if hits[0].Reason != MatchedByOrigin {
+		t.Fatalf("origin match reported as %q", hits[0].Reason)
+	}
 	// Exact by default: a subdomain does not match a record stored for the
 	// apex unless that record opted in.
-	hits, _ = e.records.Match("https://www.github.com/login")
+	hits, _ = e.records.Match("https://www.github.com/login", "")
 	if len(hits) != 0 {
 		t.Fatal("subdomain matched without the opt-in")
 	}
-	hits, _ = e.records.Match("https://github.com.attacker.example")
+	hits, _ = e.records.Match("https://github.com.attacker.example", "")
 	if len(hits) != 0 {
 		t.Fatal("lookalike matched")
 	}
-	if _, err := e.records.Match("garbage"); err == nil {
+	if _, err := e.records.Match("garbage", ""); err == nil {
 		t.Fatal("invalid origin accepted")
 	}
 }
@@ -241,7 +244,7 @@ func TestMatchOriginsWithSubdomainOptIn(t *testing.T) {
 	}
 
 	for _, origin := range []string{"https://example.com", "https://www.example.com", "https://accounts.example.com"} {
-		hits, err := e.records.Match(origin)
+		hits, err := e.records.Match(origin, "")
 		if err != nil || len(hits) != 1 {
 			t.Fatalf("%s: %d %v", origin, len(hits), err)
 		}
@@ -253,7 +256,7 @@ func TestMatchOriginsWithSubdomainOptIn(t *testing.T) {
 		"http://www.example.com",
 		"https://www.example.com:8443",
 	} {
-		hits, _ := e.records.Match(origin)
+		hits, _ := e.records.Match(origin, "")
 		if len(hits) != 0 {
 			t.Fatalf("%s matched an opted-in example.com record", origin)
 		}
@@ -286,10 +289,10 @@ func TestSubdomainOptInSurvivesReload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if hits, _ := e.records.Match("https://www.example.com"); len(hits) != 1 {
+	if hits, _ := e.records.Match("https://www.example.com", ""); len(hits) != 1 {
 		t.Fatal("the opt-in did not survive the round trip")
 	}
-	if hits, _ := e.records.Match("https://www.github.com"); len(hits) != 0 {
+	if hits, _ := e.records.Match("https://www.github.com", ""); len(hits) != 0 {
 		t.Fatal("the exact URL came back permissive")
 	}
 }
@@ -342,16 +345,16 @@ func TestRevealForOrigin(t *testing.T) {
 		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
 
 	// Matching https origin succeeds.
-	p, err := e.records.RevealForOrigin(ctx, id, "https://github.com")
+	p, err := e.records.RevealForOrigin(ctx, id, "https://github.com", "")
 	if err != nil || string(p.Password.Expose()) != "pw" {
 		t.Fatal(err)
 	}
 	// Non-matching origin denied.
-	if _, err := e.records.RevealForOrigin(ctx, id, "https://evil.example"); !errors.Is(err, shared.ErrAuthorizationDeny) {
+	if _, err := e.records.RevealForOrigin(ctx, id, "https://evil.example", ""); !errors.Is(err, shared.ErrAuthorizationDeny) {
 		t.Fatal("cross-origin reveal allowed")
 	}
 	// HTTP denied on a real (non-loopback) origin, matching or not.
-	if _, err := e.records.RevealForOrigin(ctx, id, "http://github.com"); !errors.Is(err, shared.ErrAuthorizationDeny) {
+	if _, err := e.records.RevealForOrigin(ctx, id, "http://github.com", ""); !errors.Is(err, shared.ErrAuthorizationDeny) {
 		t.Fatal("http reveal allowed on a non-loopback origin")
 	}
 }
@@ -366,20 +369,134 @@ func TestRevealForOriginLoopbackAllowsHTTP(t *testing.T) {
 	id, _ := e.records.Create(ctx, domain.TypeLogin, loginMeta(t, "Dev", "mo", "http://localhost:3000"),
 		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
 
-	p, err := e.records.RevealForOrigin(ctx, id, "http://localhost:3000")
+	p, err := e.records.RevealForOrigin(ctx, id, "http://localhost:3000", "")
 	if err != nil || string(p.Password.Expose()) != "pw" {
 		t.Fatalf("loopback http reveal: %+v %v", p, err)
 	}
 	// A different loopback port is still a different origin — loopback only
 	// relaxes the scheme requirement, not exact-origin matching itself.
-	if _, err := e.records.RevealForOrigin(ctx, id, "http://localhost:4000"); !errors.Is(err, shared.ErrAuthorizationDeny) {
+	if _, err := e.records.RevealForOrigin(ctx, id, "http://localhost:4000", ""); !errors.Is(err, shared.ErrAuthorizationDeny) {
 		t.Fatal("loopback reveal matched a different port")
 	}
 	// A real, non-loopback record over HTTP is still denied.
 	realID, _ := e.records.Create(ctx, domain.TypeLogin, loginMeta(t, "Real", "mo", "http://example.com"),
 		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
-	if _, err := e.records.RevealForOrigin(ctx, realID, "http://example.com"); !errors.Is(err, shared.ErrAuthorizationDeny) {
+	if _, err := e.records.RevealForOrigin(ctx, realID, "http://example.com", ""); !errors.Is(err, shared.ErrAuthorizationDeny) {
 		t.Fatal("http reveal allowed on a non-loopback origin")
+	}
+}
+
+// TestMatchByProjectIDOnLoopback covers #30: Match unions real-origin matches
+// with project-id matches, dedups a record that matches both ways (reporting
+// it as origin-matched, the strictly verified signal), and a project id has
+// zero effect once the origin isn't loopback — even for a record that would
+// otherwise carry a matching tag.
+func TestMatchByProjectIDOnLoopback(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+
+	// Reachable only by project id: no URL at all.
+	tagOnly := domain.RecordMetadata{Name: "Tag only", Username: "mo", ProjectID: "my-app"}
+	tagID, err := e.records.Create(ctx, domain.TypeLogin, tagOnly,
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Matches by real origin AND carries the same project id.
+	both := loginMeta(t, "Both", "mo", "http://localhost:3000")
+	both.ProjectID = "my-app"
+	bothID, err := e.records.Create(ctx, domain.TypeLogin, both,
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Same origin, no project id at all.
+	other := loginMeta(t, "Other", "mo", "http://localhost:3000")
+	otherID, err := e.records.Create(ctx, domain.TypeLogin, other,
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := e.records.Match("http://localhost:3000", "my-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 3 {
+		t.Fatalf("want 3 deduplicated matches, got %d: %+v", len(hits), hits)
+	}
+	byID := make(map[shared.ID]MatchResult, len(hits))
+	for _, h := range hits {
+		byID[h.Entry.ID] = h
+	}
+	if byID[tagID].Reason != MatchedByProject {
+		t.Fatalf("tag-only record should match by project: %+v", byID[tagID])
+	}
+	if byID[otherID].Reason != MatchedByOrigin {
+		t.Fatalf("origin-only record should match by origin: %+v", byID[otherID])
+	}
+	if byID[bothID].Reason != MatchedByOrigin {
+		t.Fatalf("a record matching both ways should report origin: %+v", byID[bothID])
+	}
+
+	// Off loopback, project id has no effect — even for a record carrying it.
+	realOnly := loginMeta(t, "Real", "mo", "https://example.com")
+	realOnly.ProjectID = "my-app"
+	if _, err := e.records.Create(ctx, domain.TypeLogin, realOnly,
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw")}); err != nil {
+		t.Fatal(err)
+	}
+	hits, err = e.records.Match("https://example.com", "my-app")
+	if err != nil || len(hits) != 1 || hits[0].Reason != MatchedByOrigin {
+		t.Fatalf("non-loopback match should be origin-only: %+v %v", hits, err)
+	}
+	for _, h := range hits {
+		if h.Entry.ID == tagID {
+			t.Fatal("tag-only record leaked onto a non-loopback origin")
+		}
+	}
+}
+
+// TestRevealForOriginByProjectID covers #30's reveal side: authorization by
+// project id works without any URL, is re-derived independently (never
+// trusting a prior Match), stays loopback-only, and a record with both a URL
+// and a project id can be revealed by either path.
+func TestRevealForOriginByProjectID(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+
+	meta := domain.RecordMetadata{Name: "Dev", Username: "mo", ProjectID: "my-app"}
+	id, err := e.records.Create(ctx, domain.TypeLogin, meta,
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := e.records.RevealForOrigin(ctx, id, "http://localhost:3000", "my-app")
+	if err != nil || string(p.Password.Expose()) != "pw" {
+		t.Fatalf("project-id reveal on loopback: %+v %v", p, err)
+	}
+	if _, err := e.records.RevealForOrigin(ctx, id, "http://localhost:3000", "other-app"); !errors.Is(err, shared.ErrAuthorizationDeny) {
+		t.Fatal("wrong project id allowed")
+	}
+	if _, err := e.records.RevealForOrigin(ctx, id, "https://example.com", "my-app"); !errors.Is(err, shared.ErrAuthorizationDeny) {
+		t.Fatal("project id matched a non-loopback origin")
+	}
+
+	both := loginMeta(t, "Both", "mo", "http://localhost:4000")
+	both.ProjectID = "another-app"
+	bothID, err := e.records.Create(ctx, domain.TypeLogin, both,
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw2")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.records.RevealForOrigin(ctx, bothID, "http://localhost:4000", ""); err != nil {
+		t.Fatal("URL path denied on a record that also carries a project id")
+	}
+	if _, err := e.records.RevealForOrigin(ctx, bothID, "http://localhost:9999", "another-app"); err != nil {
+		t.Fatal("project-id path denied on a record that also has a URL")
 	}
 }
 
@@ -518,15 +635,15 @@ func TestIndexIncrementalMaintenance(t *testing.T) {
 		Metadata: domain.RecordMetadata{Name: "one", URLs: []domain.LoginURL{u2}}})
 
 	page, _ := domain.ParseOrigin("https://site.example")
-	if len(ix.Match(page)) != 0 {
+	if len(ix.Match(page, "")) != 0 {
 		t.Fatal("stale host index entry")
 	}
 	page2, _ := domain.ParseOrigin("https://other.example")
-	if len(ix.Match(page2)) != 1 {
+	if len(ix.Match(page2, "")) != 1 {
 		t.Fatal("new host missing")
 	}
 	ix.Remove(id)
-	if ix.Len() != 0 || len(ix.Match(page2)) != 0 {
+	if ix.Len() != 0 || len(ix.Match(page2, "")) != 0 {
 		t.Fatal("remove incomplete")
 	}
 	// Removing a missing ID is a no-op.

@@ -20,15 +20,17 @@ type IndexEntry struct {
 // Index is the in-memory metadata index built at unlock and destroyed at lock
 // (PRD 17.5). Secrets never enter it.
 type Index struct {
-	mu      sync.RWMutex
-	entries map[shared.ID]*IndexEntry
-	byHost  map[string][]shared.ID // registrable domain → record IDs
+	mu          sync.RWMutex
+	entries     map[shared.ID]*IndexEntry
+	byHost      map[string][]shared.ID // registrable domain → record IDs
+	byProjectID map[string][]shared.ID // ProjectID → record IDs
 }
 
 func NewIndex() *Index {
 	return &Index{
-		entries: make(map[shared.ID]*IndexEntry),
-		byHost:  make(map[string][]shared.ID),
+		entries:     make(map[shared.ID]*IndexEntry),
+		byHost:      make(map[string][]shared.ID),
+		byProjectID: make(map[string][]shared.ID),
 	}
 }
 
@@ -36,12 +38,15 @@ func (ix *Index) Put(e *IndexEntry) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	if old, ok := ix.entries[e.ID]; ok {
-		ix.removeHostsLocked(old)
+		ix.removeIndexesLocked(old)
 	}
 	ix.entries[e.ID] = e
 	for _, u := range e.Metadata.URLs {
 		d := u.Origin.RegistrableDomain()
 		ix.byHost[d] = append(ix.byHost[d], e.ID)
+	}
+	if e.Metadata.ProjectID != "" {
+		ix.byProjectID[e.Metadata.ProjectID] = append(ix.byProjectID[e.Metadata.ProjectID], e.ID)
 	}
 }
 
@@ -49,24 +54,34 @@ func (ix *Index) Remove(id shared.ID) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	if e, ok := ix.entries[id]; ok {
-		ix.removeHostsLocked(e)
+		ix.removeIndexesLocked(e)
 		delete(ix.entries, id)
 	}
 }
 
-func (ix *Index) removeHostsLocked(e *IndexEntry) {
+// removeIndexesLocked drops e from every secondary lookup (byHost,
+// byProjectID) ahead of a Put replacing it or a Remove deleting it outright.
+func (ix *Index) removeIndexesLocked(e *IndexEntry) {
 	for _, u := range e.Metadata.URLs {
-		d := u.Origin.RegistrableDomain()
-		ids := ix.byHost[d]
-		for i, id := range ids {
-			if id == e.ID {
-				ix.byHost[d] = append(ids[:i], ids[i+1:]...)
-				break
-			}
+		removeFromMultimap(ix.byHost, u.Origin.RegistrableDomain(), e.ID)
+	}
+	if e.Metadata.ProjectID != "" {
+		removeFromMultimap(ix.byProjectID, e.Metadata.ProjectID, e.ID)
+	}
+}
+
+// removeFromMultimap drops id from m[key], deleting the key entirely once its
+// slice empties out — the shape shared by every secondary index here.
+func removeFromMultimap(m map[string][]shared.ID, key string, id shared.ID) {
+	ids := m[key]
+	for i, existing := range ids {
+		if existing == id {
+			m[key] = append(ids[:i], ids[i+1:]...)
+			break
 		}
-		if len(ix.byHost[d]) == 0 {
-			delete(ix.byHost, d)
-		}
+	}
+	if len(m[key]) == 0 {
+		delete(m, key)
 	}
 }
 
@@ -133,26 +148,65 @@ func matchesQuery(e *IndexEntry, q string) bool {
 	return false
 }
 
-// Match returns entries whose URLs match the page origin under the canonical
-// policy. The host index narrows candidates to the registrable domain first,
-// then the full origin check runs (exact host match target: p95 < 10 ms).
-func (ix *Index) Match(page domain.CanonicalOrigin) []*IndexEntry {
+// MatchReason says why an entry was returned by Match — the real, verified
+// origin, or (loopback-only) a page-supplied project tag. It is computed here
+// from the record's own data, never taken from the caller, so the UI can show
+// the two apart without the daemon trusting anything it wasn't already sure of.
+type MatchReason string
+
+const (
+	MatchedByOrigin  MatchReason = "origin"
+	MatchedByProject MatchReason = "project"
+)
+
+// MatchResult pairs an entry with why it matched. A record matching both ways
+// reports MatchedByOrigin — the strictly verified signal takes priority over
+// the loopback-only carve-out.
+type MatchResult struct {
+	Entry  *IndexEntry
+	Reason MatchReason
+}
+
+// Match returns entries that match the page origin, plus — on a loopback
+// origin with a project id supplied — entries whose ProjectID matches it too.
+// The host index narrows origin candidates to the registrable domain first,
+// then the full origin check runs (exact host match target: p95 < 10 ms). A
+// record is reported once even if it matches both ways.
+func (ix *Index) Match(page domain.CanonicalOrigin, projectID string) []MatchResult {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
-	var out []*IndexEntry
+	seen := make(map[shared.ID]bool)
+	var out []MatchResult
 	for _, id := range ix.byHost[page.RegistrableDomain()] {
 		e := ix.entries[id]
-		if e == nil {
+		if e == nil || seen[id] {
 			continue
 		}
 		for _, u := range e.Metadata.URLs {
 			if u.Matches(page) {
-				out = append(out, e)
+				out = append(out, MatchResult{Entry: e, Reason: MatchedByOrigin})
+				seen[id] = true
 				break
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
+	if projectID != "" {
+		for _, id := range ix.byProjectID[projectID] {
+			if seen[id] {
+				continue
+			}
+			e := ix.entries[id]
+			if e == nil {
+				continue
+			}
+			rec := &domain.Record{ID: e.ID, Type: e.Type, Revision: e.Revision, Metadata: e.Metadata}
+			if rec.MatchesProjectID(page, projectID) {
+				out = append(out, MatchResult{Entry: e, Reason: MatchedByProject})
+				seen[id] = true
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Entry.Metadata.Name < out[j].Entry.Metadata.Name })
 	return out
 }
 
@@ -162,4 +216,5 @@ func (ix *Index) Clear() {
 	defer ix.mu.Unlock()
 	clear(ix.entries)
 	clear(ix.byHost)
+	clear(ix.byProjectID)
 }

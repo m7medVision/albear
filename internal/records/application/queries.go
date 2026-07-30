@@ -65,9 +65,11 @@ func (s *Service) Search(query string) ([]*IndexEntry, error) {
 	return s.index.Search(query), nil
 }
 
-// Match returns login entries matching a page origin (PRD 13.3). Secrets are
-// never part of match results.
-func (s *Service) Match(rawOrigin string) ([]*IndexEntry, error) {
+// Match returns login entries matching a page origin (PRD 13.3), plus —
+// only on a loopback origin — entries whose ProjectID matches the supplied
+// one. Off loopback, projectID has no effect. Secrets are never part of
+// match results.
+func (s *Service) Match(rawOrigin string, projectID string) ([]MatchResult, error) {
 	if _, err := s.keys.Keys(); err != nil {
 		return nil, err
 	}
@@ -75,7 +77,7 @@ func (s *Service) Match(rawOrigin string) ([]*IndexEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.index.Match(origin), nil
+	return s.index.Match(origin, projectID), nil
 }
 
 // Show returns one entry's metadata.
@@ -138,11 +140,12 @@ func (s *Service) Reveal(ctx context.Context, id shared.ID) (domain.SecretPayloa
 }
 
 // RevealForOrigin releases a secret only when the record actually matches the
-// requesting page origin — the constrained reveal the extension gets
-// (PRD 13.4, 18.2). HTTP origins are refused unless the origin is loopback:
-// that is computed here, from the origin this method itself parses, never
-// taken as a parameter a caller could set.
-func (s *Service) RevealForOrigin(ctx context.Context, id shared.ID, rawOrigin string) (domain.SecretPayload, error) {
+// requesting page origin, or — loopback only — the project id presented for
+// it. This is the constrained reveal the extension gets (PRD 13.4, 18.2).
+// Everything here is re-derived from what this call itself parses and looks
+// up: HTTP-allowance, loopback-ness, and the project-id check are never taken
+// on trust from a prior Match call or from the caller.
+func (s *Service) RevealForOrigin(ctx context.Context, id shared.ID, rawOrigin string, projectID string) (domain.SecretPayload, error) {
 	if _, err := s.keys.Keys(); err != nil {
 		return domain.SecretPayload{}, err
 	}
@@ -158,7 +161,7 @@ func (s *Service) RevealForOrigin(ctx context.Context, id shared.ID, rawOrigin s
 		return domain.SecretPayload{}, shared.ErrRecordNotFound
 	}
 	rec := &domain.Record{ID: e.ID, Type: e.Type, Revision: e.Revision, Metadata: e.Metadata}
-	if !rec.MatchesOrigin(origin) {
+	if !rec.MatchesOrigin(origin) && !rec.MatchesProjectID(origin, projectID) {
 		return domain.SecretPayload{}, shared.ErrAuthorizationDeny
 	}
 	return s.Reveal(ctx, id)

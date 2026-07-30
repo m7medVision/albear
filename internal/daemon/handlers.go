@@ -216,11 +216,11 @@ func (s *Server) dispatch(ctx context.Context, st *connState, op string, payload
 		if err != nil {
 			return nil, err
 		}
-		entries, err := s.records.Match(p.Origin)
+		results, err := s.records.Match(p.Origin, p.ProjectID)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"records": toRecordViews(entries)}, nil
+		return map[string]any{"records": toMatchViews(results)}, nil
 	case "records.show":
 		p, err := decode[refPayload](payload)
 		if err != nil {
@@ -456,7 +456,7 @@ func (s *Server) opRevealForOrigin(ctx context.Context, payload json.RawMessage)
 	if err != nil {
 		return nil, shared.ErrValidation
 	}
-	secret, err := s.records.RevealForOrigin(ctx, id, p.Origin)
+	secret, err := s.records.RevealForOrigin(ctx, id, p.Origin, p.ProjectID)
 	if err != nil {
 		return nil, err
 	}
