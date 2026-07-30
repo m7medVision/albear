@@ -894,6 +894,51 @@ func TestRevealForOriginLoopbackAllowsHTTP(t *testing.T) {
 	}
 }
 
+// TestProjectIDFieldRoundTripsOverSocket: ProjectID is a plain metadata field
+// like Environment or Tags — it has to survive create, update, and show over
+// the wire, with no matching behaviour attached to it yet.
+func TestProjectIDFieldRoundTripsOverSocket(t *testing.T) {
+	d := startDaemon(t)
+	cli := cliConn(t, d)
+	initAndUnlock(t, cli)
+
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := cli.Call("records.create", map[string]any{
+		"name": "Dev", "username": "mo", "password": "pw",
+		"projectId": "  my-app  ",
+	}, &created); err != nil {
+		t.Fatal(err)
+	}
+
+	var shown struct {
+		ProjectID string `json:"projectId"`
+	}
+	if err := cli.Call("records.show", map[string]string{"ref": created.ID}, &shown); err != nil {
+		t.Fatal(err)
+	}
+	// Trimmed on the way in: this is compared for equality by a matching
+	// path, not displayed, so incidental whitespace must not survive.
+	if shown.ProjectID != "my-app" {
+		t.Fatalf("projectId did not round trip trimmed: %q", shown.ProjectID)
+	}
+
+	if err := cli.Call("records.update", map[string]any{
+		"id": created.ID, "expectedRevision": 1,
+		"name": "Dev", "username": "mo", "password": "pw",
+		"projectId": "other-app",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Call("records.show", map[string]string{"ref": created.ID}, &shown); err != nil {
+		t.Fatal(err)
+	}
+	if shown.ProjectID != "other-app" {
+		t.Fatalf("projectId did not update: %q", shown.ProjectID)
+	}
+}
+
 // TestRevealForOriginSubdomainOptIn: the opt-in is read from the stored record
 // daemon-side (invariant 9). A client never sends a policy, so a compromised
 // one cannot widen its own matching.

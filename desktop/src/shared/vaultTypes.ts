@@ -76,6 +76,11 @@ export interface RecordView {
   /** Each URL with its subdomain policy. This is what an editor must write back. */
   urlEntries?: UrlEntry[];
   tags?: string[];
+  /**
+   * Exact-match identifier distinct from `tags` — compared for equality by a
+   * matching path, not searched or organized by.
+   */
+  projectId?: string;
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -105,6 +110,7 @@ export interface RecordFields {
   environment?: string;
   urlEntries?: UrlEntry[];
   tags?: string[];
+  projectId?: string;
   password?: string;
   notes?: string;
   apiKey?: string;

@@ -31,9 +31,14 @@ type RecordMetadata struct {
 	Environment string
 	URLs        []LoginURL
 	Tags        []string
-	CustomKeys  []string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// ProjectID is a single, exact-match identifier distinct from Tags: it
+	// exists to be compared for equality by a matching path, not searched or
+	// displayed as organizational metadata. Trimmed, case-sensitive, no
+	// uniqueness enforced.
+	ProjectID  string
+	CustomKeys []string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // SecretPayload is the on-demand half. It is decrypted only for an explicit

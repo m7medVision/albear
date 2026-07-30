@@ -3,6 +3,8 @@
 package daemon
 
 import (
+	"strings"
+
 	recordsapp "github.com/m7medVision/albear/internal/records/application"
 	domain "github.com/m7medVision/albear/internal/records/domain"
 	shared "github.com/m7medVision/albear/internal/shared/domain"
@@ -41,6 +43,7 @@ type recordFields struct {
 	URLs       []string          `json:"urls,omitempty"`
 	URLEntries []urlEntryField   `json:"urlEntries,omitempty"`
 	Tags       []string          `json:"tags,omitempty"`
+	ProjectID  string            `json:"projectId,omitempty"`
 	Password   string            `json:"password,omitempty"`
 	Notes      string            `json:"notes,omitempty"`
 	APIKey     string            `json:"apiKey,omitempty"`
@@ -123,6 +126,7 @@ type recordView struct {
 	URLs        []string        `json:"urls,omitempty"`
 	URLEntries  []urlEntryField `json:"urlEntries,omitempty"`
 	Tags        []string        `json:"tags,omitempty"`
+	ProjectID   string          `json:"projectId,omitempty"`
 	CreatedAtMs int64           `json:"createdAtMs"`
 	UpdatedAtMs int64           `json:"updatedAtMs"`
 }
@@ -138,7 +142,7 @@ func toRecordView(e *recordsapp.IndexEntry) recordView {
 		ID: e.ID.String(), Type: string(e.Type), Revision: e.Revision,
 		Name: e.Metadata.Name, Username: e.Metadata.Username,
 		Service: e.Metadata.Service, Environment: e.Metadata.Environment,
-		URLs: urls, URLEntries: entries, Tags: e.Metadata.Tags,
+		URLs: urls, URLEntries: entries, Tags: e.Metadata.Tags, ProjectID: e.Metadata.ProjectID,
 		CreatedAtMs: e.Metadata.CreatedAt.UnixMilli(),
 		UpdatedAtMs: e.Metadata.UpdatedAt.UnixMilli(),
 	}
@@ -205,7 +209,8 @@ func fieldsToDomain(f recordFields) (domain.RecordMetadata, domain.SecretPayload
 	meta := domain.RecordMetadata{
 		Name: f.Name, Username: f.Username,
 		Service: f.Service, Environment: f.Environment,
-		URLs: urls, Tags: f.Tags, CustomKeys: customKeys,
+		URLs: urls, Tags: f.Tags, ProjectID: strings.TrimSpace(f.ProjectID),
+		CustomKeys: customKeys,
 	}
 	secret := domain.SecretPayload{
 		Password:     shared.NewSecretFromString(f.Password),

@@ -187,6 +187,8 @@ function requireRecordFields(value: unknown): RecordFields {
   if (service !== undefined) fields.service = service;
   const environment = optionalString(f.environment, 'environment');
   if (environment !== undefined) fields.environment = environment;
+  const projectId = optionalString(f.projectId, 'projectId');
+  if (projectId !== undefined) fields.projectId = projectId;
   const password = optionalString(f.password, 'password');
   if (password !== undefined) fields.password = password;
   const notes = optionalString(f.notes, 'notes');

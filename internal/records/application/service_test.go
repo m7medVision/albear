@@ -294,6 +294,47 @@ func TestSubdomainOptInSurvivesReload(t *testing.T) {
 	}
 }
 
+// TestProjectIDRoundTripsThroughCreateUpdateAndReload: ProjectID has to
+// survive create, an unrelated update, and an index rebuild at unlock —
+// exactly like every other piece of record metadata.
+func TestProjectIDRoundTripsThroughCreateUpdateAndReload(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+
+	meta := domain.RecordMetadata{Name: "Dev", Username: "mo", ProjectID: "my-app"}
+	id, err := e.records.Create(ctx, domain.TypeLogin, meta,
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := e.records.Show(id)
+	if err != nil || entry.Metadata.ProjectID != "my-app" {
+		t.Fatalf("%+v %v", entry, err)
+	}
+
+	// An update that doesn't touch ProjectID must carry it forward, the same
+	// way every other metadata field on this record does.
+	updated := entry.Metadata
+	updated.Username = "mo2"
+	if err := e.records.Update(ctx, id, entry.Revision, updated,
+		domain.SecretPayload{Password: shared.NewSecretFromString("pw")}); err != nil {
+		t.Fatal(err)
+	}
+	entry, err = e.records.Show(id)
+	if err != nil || entry.Metadata.ProjectID != "my-app" || entry.Metadata.Username != "mo2" {
+		t.Fatalf("%+v %v", entry, err)
+	}
+
+	e.records.ClearIndex()
+	if err := e.records.LoadIndex(ctx); err != nil {
+		t.Fatal(err)
+	}
+	entry, err = e.records.Show(id)
+	if err != nil || entry.Metadata.ProjectID != "my-app" {
+		t.Fatalf("ProjectID did not survive reload: %+v %v", entry, err)
+	}
+}
+
 func TestRevealForOrigin(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
@@ -496,7 +537,7 @@ func TestCodecRoundTrip(t *testing.T) {
 	u, _ := domain.NewLoginURL("https://example.com")
 	meta := domain.RecordMetadata{
 		Name: "n", Username: "u", Service: "svc", Environment: "prod",
-		URLs: []domain.LoginURL{u}, Tags: []string{"a", "b"}, CustomKeys: []string{"k"},
+		URLs: []domain.LoginURL{u}, Tags: []string{"a", "b"}, ProjectID: "proj-1", CustomKeys: []string{"k"},
 		CreatedAt: time.UnixMilli(1000), UpdatedAt: time.UnixMilli(2000),
 	}
 	b, err := encodeMetadata(domain.TypeAPICredential, meta)
@@ -509,6 +550,9 @@ func TestCodecRoundTrip(t *testing.T) {
 	}
 	if got.Name != "n" || got.Service != "svc" || len(got.URLs) != 1 || got.CreatedAt.UnixMilli() != 1000 {
 		t.Fatalf("%+v", got)
+	}
+	if got.ProjectID != "proj-1" {
+		t.Fatalf("ProjectID did not round trip: %+v", got)
 	}
 
 	sec := domain.SecretPayload{
@@ -580,6 +624,23 @@ func TestCodecURLPolicyEncoding(t *testing.T) {
 	}
 	if got.URLs[0].AllowSubdomains || !got.URLs[1].AllowSubdomains {
 		t.Fatalf("policy did not round trip: %+v", got.URLs)
+	}
+}
+
+// TestCodecDecodesLegacyRecordsWithNoProjectID: ProjectID shipped after this
+// codec did. No migration exists or is needed — a record written before the
+// field existed simply has no "projectId" key, and the tolerant decoder
+// leaves it as the zero value, same as any other field added to this DTO.
+func TestCodecDecodesLegacyRecordsWithNoProjectID(t *testing.T) {
+	legacy := []byte(`{"type":"login","name":"GitHub","username":"mo",` +
+		`"urls":["https://github.com"],"createdAtMs":1000,"updatedAtMs":2000}`)
+
+	_, got, err := decodeMetadata(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProjectID != "" {
+		t.Fatalf("legacy record decoded a non-empty ProjectID: %q", got.ProjectID)
 	}
 }
 

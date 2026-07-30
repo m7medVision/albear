@@ -104,6 +104,14 @@ describe('albear:create validation', () => {
     );
   });
 
+  it('forwards projectId, distinct from tags', async () => {
+    await invoke('albear:create', { name: 'x', projectId: 'my-app', tags: ['work'] });
+    expect(call).toHaveBeenCalledWith(
+      'records.create',
+      expect.objectContaining({ projectId: 'my-app', tags: ['work'] }),
+    );
+  });
+
   it('never forwards a plain urls list, which the daemon would read as exact', async () => {
     await invoke('albear:create', {
       name: 'x',

@@ -104,6 +104,9 @@ export function RecordEditor({
     seed?.record.environment ?? '',
   );
   const [tags, setTags] = React.useState((seed?.record.tags ?? []).join(', '));
+  const [projectId, setProjectId] = React.useState(
+    seed?.record.projectId ?? '',
+  );
   // Prefer urlEntries: `urls` carries no policy, and falling back to it would
   // reset every opt-in to exact on save.
   const [urls, setUrls] = React.useState<UrlEntry[]>(
@@ -127,6 +130,7 @@ export function RecordEditor({
     if (username.trim()) fields.username = username.trim();
     if (service.trim()) fields.service = service.trim();
     if (environment.trim()) fields.environment = environment.trim();
+    if (projectId.trim()) fields.projectId = projectId.trim();
 
     const tagList = tags
       .split(',')
@@ -335,6 +339,17 @@ export function RecordEditor({
             placeholder="comma, separated"
             onChange={(e) => setTags(e.target.value)}
           />
+        </Field>
+
+        <Field label="Project ID">
+          <Input
+            value={projectId}
+            placeholder="e.g. my-app"
+            onChange={(e) => setProjectId(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            a project identifier, separate from the URL above
+          </p>
         </Field>
 
         <CustomEditor fields={custom} onChange={setCustom} />

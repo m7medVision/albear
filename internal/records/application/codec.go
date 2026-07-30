@@ -34,9 +34,13 @@ type metadataDTO struct {
 	URLs        []string   `json:"urls,omitempty"`
 	URLEntries  []urlEntry `json:"urlEntries,omitempty"`
 	Tags        []string   `json:"tags,omitempty"`
-	CustomKeys  []string   `json:"customKeys,omitempty"`
-	CreatedAtMs int64      `json:"createdAtMs"`
-	UpdatedAtMs int64      `json:"updatedAtMs"`
+	// ProjectID is new: absent on any record written before it existed, which
+	// decodes to the empty string exactly like any other omitted field here —
+	// no migration, same tolerant-decode contract as the rest of this DTO.
+	ProjectID   string   `json:"projectId,omitempty"`
+	CustomKeys  []string `json:"customKeys,omitempty"`
+	CreatedAtMs int64    `json:"createdAtMs"`
+	UpdatedAtMs int64    `json:"updatedAtMs"`
 }
 
 // urlEntry is one stored URL and its matching policy.
@@ -66,7 +70,7 @@ func encodeMetadata(t domain.RecordType, m domain.RecordMetadata) ([]byte, error
 	return json.Marshal(metadataDTO{
 		Type: string(t), Name: m.Name, Username: m.Username,
 		Service: m.Service, Environment: m.Environment,
-		URLEntries: entries, Tags: m.Tags, CustomKeys: m.CustomKeys,
+		URLEntries: entries, Tags: m.Tags, ProjectID: m.ProjectID, CustomKeys: m.CustomKeys,
 		CreatedAtMs: m.CreatedAt.UnixMilli(), UpdatedAtMs: m.UpdatedAt.UnixMilli(),
 	})
 }
@@ -98,7 +102,7 @@ func decodeMetadata(b []byte) (domain.RecordType, domain.RecordMetadata, error) 
 	return domain.RecordType(dto.Type), domain.RecordMetadata{
 		Name: dto.Name, Username: dto.Username,
 		Service: dto.Service, Environment: dto.Environment,
-		URLs: urls, Tags: dto.Tags, CustomKeys: dto.CustomKeys,
+		URLs: urls, Tags: dto.Tags, ProjectID: dto.ProjectID, CustomKeys: dto.CustomKeys,
 		CreatedAt: time.UnixMilli(dto.CreatedAtMs), UpdatedAt: time.UnixMilli(dto.UpdatedAtMs),
 	}, nil
 }
