@@ -31,6 +31,9 @@ interface RecordView {
   id: string
   name: string
   username?: string
+  service?: string
+  environment?: string
+  tags?: string[]
 }
 
 type View = 'pair' | 'locked' | 'unlocked' | 'none'
@@ -335,26 +338,31 @@ export function App(): React.ReactElement {
                   </CardContent>
                 </Card>
               ) : (
-                records.map((r) => (
-                  <Card key={r.id}>
-                    <CardContent className="flex items-center gap-2 p-2.5">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{r.name}</div>
-                        {r.username && (
-                          <div className="text-xs text-muted-foreground truncate">{r.username}</div>
-                        )}
-                      </div>
-                      <Button
-                        size="sm"
-                        onClick={() => void fill(r.id)}
-                        disabled={insecure}
-                      >
-                        <Eye />
-                        Fill
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))
+                records.map((r) => {
+                  const subtitle = [r.username, r.service, r.environment, r.tags?.join(', ')]
+                    .filter(Boolean)
+                    .join(' · ')
+                  return (
+                    <Card key={r.id}>
+                      <CardContent className="flex items-center gap-2 p-2.5">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">{r.name}</div>
+                          {subtitle && (
+                            <div className="text-xs text-muted-foreground truncate">{subtitle}</div>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => void fill(r.id)}
+                          disabled={insecure}
+                        >
+                          <Eye />
+                          Fill
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  )
+                })
               )}
             </div>
 
