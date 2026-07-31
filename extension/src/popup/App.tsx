@@ -35,6 +35,10 @@ interface RecordView {
   service?: string
   environment?: string
   tags?: string[]
+  // Set only by records.match: "origin" for a verified real-origin match,
+  // "project" for a loopback-only match by page-supplied project tag — a
+  // materially weaker trust level the UI should never present identically.
+  matchedBy?: 'origin' | 'project'
 }
 
 type View = 'pair' | 'locked' | 'unlocked' | 'none'
@@ -367,7 +371,14 @@ export function App(): React.ReactElement {
                     <Card key={r.id}>
                       <CardContent className="flex items-center gap-2 p-2.5">
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate">{r.name}</div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="text-sm font-medium truncate min-w-0">{r.name}</div>
+                            {r.matchedBy === 'project' && (
+                              <Badge variant="outline" className="shrink-0" title="Matched by this page's project tag, not its verified origin">
+                                project tag
+                              </Badge>
+                            )}
+                          </div>
                           {subtitle && (
                             <div className="text-xs text-muted-foreground truncate">{subtitle}</div>
                           )}
