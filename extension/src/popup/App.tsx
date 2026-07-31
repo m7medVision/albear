@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardAction } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
+import { isLoopbackHost } from '@/lib/origin'
 
 interface BgResponse<T> {
   ok: boolean
@@ -54,7 +55,7 @@ export function App(): React.ReactElement {
   const [errText, setErrText] = React.useState<string | undefined>()
   const [records, setRecords] = React.useState<RecordView[]>([])
   const [origin, setOrigin] = React.useState<string>('')
-  const [insecure, setInsecure] = React.useState(false)
+  const [blocked, setBlocked] = React.useState(false)
   const [phrase, setPhrase] = React.useState<string>('')
   const [pairing, setPairing] = React.useState(false)
   const [password, setPassword] = React.useState('')
@@ -106,19 +107,39 @@ export function App(): React.ReactElement {
     const tab = tabs[0]
     if (!tab?.url || !/^https?:/.test(tab.url)) {
       setOrigin('')
-      setInsecure(false)
+      setBlocked(false)
       setRecords([])
       return
     }
-    const o = new URL(tab.url).origin
-    setOrigin(o)
-    setInsecure(o.startsWith('http://'))
-    if (o.startsWith('http://')) {
+    const url = new URL(tab.url)
+    const loopback = isLoopbackHost(url.hostname)
+    setOrigin(url.origin)
+    // HTTP is only actually blocked off loopback — matches what the daemon
+    // itself enforces (records.revealForOrigin allows loopback over HTTP).
+    const httpBlocked = url.protocol === 'http:' && !loopback
+    setBlocked(httpBlocked)
+    if (httpBlocked) {
       setRecords([])
       return
     }
-    const res = await bg<{ records: RecordView[] }>({ kind: 'match', origin: o })
+    const projectId = loopback ? await readTabProjectTag(tab.id) : undefined
+    const res = await bg<{ records: RecordView[] }>({ kind: 'match', origin: url.origin, projectId })
     setRecords(res.records)
+  }
+
+  // The project tag only ever matters on loopback, so this is only called
+  // there — no point asking every ordinary page's content script for one.
+  // Failure (no content script reachable on this tab) just means no tag.
+  async function readTabProjectTag(tabId: number | undefined): Promise<string | undefined> {
+    if (tabId === undefined) return undefined
+    try {
+      const res = (await chrome.tabs.sendMessage(tabId, { kind: 'albear.getProjectTag' })) as {
+        projectId: string | null
+      }
+      return res.projectId ?? undefined
+    } catch {
+      return undefined
+    }
   }
 
   React.useEffect(() => {
@@ -322,7 +343,7 @@ export function App(): React.ReactElement {
               </Button>
             </div>
 
-            {insecure && (
+            {blocked && (
               <Alert variant="destructive">
                 <ShieldOff />
                 <AlertTitle>Insecure origin</AlertTitle>
@@ -354,7 +375,7 @@ export function App(): React.ReactElement {
                         <Button
                           size="sm"
                           onClick={() => void fill(r.id)}
-                          disabled={insecure}
+                          disabled={blocked}
                         >
                           <Eye />
                           Fill
@@ -425,7 +446,7 @@ export function App(): React.ReactElement {
                   <div className="flex gap-2">
                     <Button
                       onClick={() => void saveNew()}
-                      disabled={saving || insecure || !origin}
+                      disabled={saving || blocked || !origin}
                       className="flex-1"
                     >
                       {saving && <Loader2 className="animate-spin" />}

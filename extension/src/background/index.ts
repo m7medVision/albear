@@ -223,9 +223,11 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
     case 'lock':
       return (await getSession()).call('vault.lock')
     case 'match': {
-      // Popup match: for the active tab's origin.
+      // Popup match: for the active tab's origin. projectId only ever has an
+      // effect daemon-side when the origin turns out to be loopback — the
+      // popup already only sends one when it detected the tab is loopback.
       const t = await getSession()
-      return t.call('records.match', { origin: msg['origin'] })
+      return t.call('records.match', { origin: msg['origin'], projectId: msg['projectId'] })
     }
     case 'generate':
       return (await getSession()).call('password.generate', { default: true })
@@ -246,10 +248,12 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
     }
     case 'records.revealForFill': {
       const t = await getSession()
-      // Daemon re-validates that the record actually matches this origin.
+      // Daemon re-validates that the record actually matches this origin (or,
+      // loopback only, the project id the content script re-read itself).
       return t.call('records.revealForOrigin', {
         id: msg['id'],
         origin: senderOrigin(sender),
+        projectId: msg['projectId'],
       })
     }
     case 'records.saveLogin': {

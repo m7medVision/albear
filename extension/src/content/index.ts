@@ -12,6 +12,7 @@
 // rendered into it; otherwise the next page load picks the capture back up
 // via records.consumeCapture and offers the bar there.
 import { detectLoginForms, type LoginForm } from './forms'
+import { readProjectTag } from './project-tag'
 import {
   decideMode,
   renderSaveBar,
@@ -51,9 +52,13 @@ async function fillSelected(recordId: string): Promise<void> {
   const forms = detectLoginForms(document)
   const target = forms[0]
   if (!target) throw new Error('no login form on this page')
+  // Re-read the project tag here rather than trusting whatever the popup
+  // found when it built the suggestion list — the daemon re-derives
+  // everything at reveal time anyway (invariant 9), so the client should too.
   const secret = await bg<{ username: string; password: string }>({
     kind: 'records.revealForFill',
     id: recordId,
+    projectId: readProjectTag(document) ?? undefined,
   })
   fillLogin(target, secret.username, secret.password)
   secret.password = ''
@@ -73,6 +78,24 @@ function fillField(input: HTMLInputElement, value: string): void {
   input.dispatchEvent(new Event('change', { bubbles: true }))
   input.blur()
 }
+
+// ---- project tag (popup → content) -----------------------------------------
+//
+// Only ever read when a login form is already present — nothing to suggest a
+// credential for otherwise (PRD-aligned with the fill/capture paths above).
+
+interface ProjectTagRequest {
+  kind: 'albear.getProjectTag'
+}
+
+chrome.runtime.onMessage.addListener(
+  (msg: ProjectTagRequest, _sender: chrome.runtime.MessageSender, sendResponse: (r: unknown) => void) => {
+    if (msg?.kind !== 'albear.getProjectTag') return undefined
+    const projectId = detectLoginForms(document).length > 0 ? readProjectTag(document) : null
+    sendResponse({ projectId })
+    return undefined
+  },
+)
 
 // ---- capture (submit or formless click) -----------------------------------
 
