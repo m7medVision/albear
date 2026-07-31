@@ -264,6 +264,7 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
         username: msg['username'],
         password: msg['password'],
         urls: [senderOrigin(sender)],
+        projectId: msg['projectId'],
       })
     }
     case 'records.updateLogin': {
@@ -276,6 +277,7 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
         username: msg['username'],
         password: msg['password'],
         urls: [senderOrigin(sender)],
+        projectId: msg['projectId'],
       })
     }
 

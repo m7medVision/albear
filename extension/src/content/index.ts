@@ -16,8 +16,16 @@ import { readProjectTag } from './project-tag'
 import {
   decideMode,
   renderSaveBar,
+  type BarCallbacks,
   type ExistingRecord,
 } from './save-bar'
+
+// Only ever meaningful when a login form is on the page — nothing to tag a
+// credential for otherwise, and a page navigated to after capture (the
+// resumeStash path) may have no form of its own at all.
+function detectedProjectTag(hasLoginForm = detectLoginForms(document).length > 0): string | null {
+  return hasLoginForm ? readProjectTag(document) : null
+}
 
 interface BgResponse<T> {
   ok: boolean
@@ -58,7 +66,7 @@ async function fillSelected(recordId: string): Promise<void> {
   const secret = await bg<{ username: string; password: string }>({
     kind: 'records.revealForFill',
     id: recordId,
-    projectId: readProjectTag(document) ?? undefined,
+    projectId: detectedProjectTag(true) ?? undefined,
   })
   fillLogin(target, secret.username, secret.password)
   secret.password = ''
@@ -91,8 +99,7 @@ interface ProjectTagRequest {
 chrome.runtime.onMessage.addListener(
   (msg: ProjectTagRequest, _sender: chrome.runtime.MessageSender, sendResponse: (r: unknown) => void) => {
     if (msg?.kind !== 'albear.getProjectTag') return undefined
-    const projectId = detectLoginForms(document).length > 0 ? readProjectTag(document) : null
-    sendResponse({ projectId })
+    sendResponse({ projectId: detectedProjectTag() })
     return undefined
   },
 )
@@ -152,37 +159,49 @@ function capture(c: Captured): void {
   void offerBar({ username: usernameValue, password: passwordValue })
 }
 
+// Shared by offerBar and resumeStash: a new record picks up whatever project
+// tag is on the page right now; an update never touches the field at all,
+// carrying the existing record's value forward unchanged rather than wiping
+// it (update replaces the whole record — an omitted field would clear it) or
+// silently overwriting it with a different tag the user didn't ask to set.
+function saveBarCallbacks(): BarCallbacks {
+  const projectId = detectedProjectTag() ?? undefined
+  return {
+    onSave: async (c) => {
+      await bg({ kind: 'records.saveLogin', username: c.username, password: c.password, projectId })
+      await bg({ kind: 'records.clearCapture' })
+    },
+    onUpdate: async (e, c) => {
+      await bg({
+        kind: 'records.updateLogin',
+        id: e.id,
+        expectedRevision: e.revision,
+        username: c.username,
+        password: c.password,
+        projectId: e.projectId,
+      })
+      await bg({ kind: 'records.clearCapture' })
+    },
+    onSaveNew: async (c) => {
+      await bg({ kind: 'records.saveLogin', username: c.username, password: c.password, projectId })
+      await bg({ kind: 'records.clearCapture' })
+    },
+  }
+}
+
 async function offerBar(candidate: { username: string; password: string }): Promise<void> {
   try {
     const st = await bg<{ paired?: boolean; unlocked?: boolean }>({ kind: 'status' })
     if (!st.paired || !st.unlocked) return
-    const matches = await bg<ExistingRecord[]>({ kind: 'records.matchForTab' })
+    // records.match's daemon response is {records: [...]}, not a bare array.
+    const { records: matches } = await bg<{ records: ExistingRecord[] }>({ kind: 'records.matchForTab' })
     if (document.getElementById('albear-save-bar')) return
     const decision = decideMode(matches, candidate.username)
     renderSaveBar({
       mode: decision.mode,
       existing: decision.existing,
       candidate,
-      callbacks: {
-        onSave: async (c) => {
-          await bg({ kind: 'records.saveLogin', username: c.username, password: c.password })
-          await bg({ kind: 'records.clearCapture' })
-        },
-        onUpdate: async (e, c) => {
-          await bg({
-            kind: 'records.updateLogin',
-            id: e.id,
-            expectedRevision: e.revision,
-            username: c.username,
-            password: c.password,
-          })
-          await bg({ kind: 'records.clearCapture' })
-        },
-        onSaveNew: async (c) => {
-          await bg({ kind: 'records.saveLogin', username: c.username, password: c.password })
-          await bg({ kind: 'records.clearCapture' })
-        },
-      },
+      callbacks: saveBarCallbacks(),
     })
   } catch {
     // background not reachable; nothing to render.
@@ -204,33 +223,15 @@ async function resumeStash(): Promise<void> {
   try {
     const st = await bg<{ paired?: boolean; unlocked?: boolean }>({ kind: 'status' })
     if (!st.paired || !st.unlocked) return
-    const matches = await bg<ExistingRecord[]>({ kind: 'records.matchForTab' })
+    // records.match's daemon response is {records: [...]}, not a bare array.
+    const { records: matches } = await bg<{ records: ExistingRecord[] }>({ kind: 'records.matchForTab' })
     if (document.getElementById('albear-save-bar')) return
     const decision = decideMode(matches, candidate.username)
     renderSaveBar({
       mode: decision.mode,
       existing: decision.existing,
       candidate,
-      callbacks: {
-        onSave: async (c) => {
-          await bg({ kind: 'records.saveLogin', username: c.username, password: c.password })
-          await bg({ kind: 'records.clearCapture' })
-        },
-        onUpdate: async (e, c) => {
-          await bg({
-            kind: 'records.updateLogin',
-            id: e.id,
-            expectedRevision: e.revision,
-            username: c.username,
-            password: c.password,
-          })
-          await bg({ kind: 'records.clearCapture' })
-        },
-        onSaveNew: async (c) => {
-          await bg({ kind: 'records.saveLogin', username: c.username, password: c.password })
-          await bg({ kind: 'records.clearCapture' })
-        },
-      },
+      callbacks: saveBarCallbacks(),
     })
   } catch {
     // ignore

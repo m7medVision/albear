@@ -400,7 +400,7 @@ describe('content script: save flow on submit', () => {
       </form>`)
     state.reply = (msg) => {
       if (msg['kind'] === 'status') return { ok: true, data: { paired: true, unlocked: true } }
-      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: [] }
+      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: { records: [] } }
       if (msg['kind'] === 'records.consumeCapture') return { ok: true, data: null }
       return { ok: true, data: { id: 'new' } }
     }
@@ -420,6 +420,52 @@ describe('content script: save flow on submit', () => {
     await vi.waitFor(() => expect(state.calls.some((m) => m['kind'] === 'records.clearCapture')).toBe(true))
   })
 
+  it('AC1: includes the page-detected project tag when saving a new record', async () => {
+    setBody(`
+      <form albear-id="my-app">
+        <input type="text" name="user" value="alice" />
+        <input type="password" name="pass" value="hunter2" />
+      </form>`)
+    state.reply = (msg) => {
+      if (msg['kind'] === 'status') return { ok: true, data: { paired: true, unlocked: true } }
+      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: { records: [] } }
+      if (msg['kind'] === 'records.consumeCapture') return { ok: true, data: null }
+      return { ok: true, data: { id: 'new' } }
+    }
+    installChrome(state)
+    await loadContentScript()
+    dispatchSubmit(document.querySelector('form')!)
+    await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).not.toBeNull())
+    const buttons = Array.from(barRoot!.querySelectorAll('button')) as HTMLButtonElement[]
+    userClick(buttons[0]!)
+    await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).toBeNull())
+    const saveCall = state.calls.find((m) => m['kind'] === 'records.saveLogin')
+    expect(saveCall!['projectId']).toBe('my-app')
+  })
+
+  it('AC3: omits projectId when saving a new record with no page tag present', async () => {
+    setBody(`
+      <form>
+        <input type="text" name="user" value="alice" />
+        <input type="password" name="pass" value="hunter2" />
+      </form>`)
+    state.reply = (msg) => {
+      if (msg['kind'] === 'status') return { ok: true, data: { paired: true, unlocked: true } }
+      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: { records: [] } }
+      if (msg['kind'] === 'records.consumeCapture') return { ok: true, data: null }
+      return { ok: true, data: { id: 'new' } }
+    }
+    installChrome(state)
+    await loadContentScript()
+    dispatchSubmit(document.querySelector('form')!)
+    await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).not.toBeNull())
+    const buttons = Array.from(barRoot!.querySelectorAll('button')) as HTMLButtonElement[]
+    userClick(buttons[0]!)
+    await vi.waitFor(() => expect(document.getElementById('albear-save-bar')).toBeNull())
+    const saveCall = state.calls.find((m) => m['kind'] === 'records.saveLogin')
+    expect(saveCall!['projectId']).toBeUndefined()
+  })
+
   it('stashes the capture immediately on submit, before the vault gate resolves', async () => {
     // Regression test: sites often navigate away the instant submit fires,
     // tearing down this document before the async gate/match/render chain
@@ -432,7 +478,7 @@ describe('content script: save flow on submit', () => {
       </form>`)
     state.reply = (msg) => {
       if (msg['kind'] === 'status') return { ok: true, data: { paired: true, unlocked: true } }
-      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: [] }
+      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: { records: [] } }
       if (msg['kind'] === 'records.consumeCapture') return { ok: true, data: null }
       return { ok: true, data: { id: 'new' } }
     }
@@ -458,7 +504,11 @@ describe('content script: save flow on submit', () => {
       if (msg['kind'] === 'records.matchForTab') {
         return {
           ok: true,
-          data: [{ id: 'r1', revision: 4, name: 'Example', username: 'alice' }],
+          data: {
+            records: [
+              { id: 'r1', revision: 4, name: 'Example', username: 'alice', projectId: 'existing-app' },
+            ],
+          },
         }
       }
       if (msg['kind'] === 'records.consumeCapture') return { ok: true, data: null }
@@ -478,6 +528,9 @@ describe('content script: save flow on submit', () => {
     expect(updateCall!['expectedRevision']).toBe(4)
     expect(updateCall!['username']).toBe('alice')
     expect(updateCall!['password']).toBe('hunter3')
+    // AC2: the existing record's own Project ID is carried forward
+    // unchanged on update — never wiped, never replaced by a page tag.
+    expect(updateCall!['projectId']).toBe('existing-app')
   })
 
   it('surfaces save failure in the bar status line', async () => {
@@ -488,7 +541,7 @@ describe('content script: save flow on submit', () => {
       </form>`)
     state.reply = (msg) => {
       if (msg['kind'] === 'status') return { ok: true, data: { paired: true, unlocked: true } }
-      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: [] }
+      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: { records: [] } }
       if (msg['kind'] === 'records.saveLogin')
         return { ok: false, error: { code: 'VAULT_LOCKED', message: 'VAULT_LOCKED' } }
       return { ok: true, data: null }
@@ -549,7 +602,7 @@ describe('content script: formless login pattern', () => {
     loadPracticeTestSite()
     state.reply = (msg) => {
       if (msg['kind'] === 'status') return { ok: true, data: { paired: true, unlocked: true } }
-      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: [] }
+      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: { records: [] } }
       if (msg['kind'] === 'records.consumeCapture') return { ok: true, data: null }
       return { ok: true, data: { id: 'new' } }
     }
@@ -577,7 +630,7 @@ describe('content script: formless login pattern', () => {
     loadPracticeTestSite()
     state.reply = (msg) => {
       if (msg['kind'] === 'status') return { ok: true, data: { paired: true, unlocked: true } }
-      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: [] }
+      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: { records: [] } }
       if (msg['kind'] === 'records.consumeCapture') return { ok: true, data: null }
       return { ok: true, data: { id: 'new' } }
     }
@@ -598,7 +651,7 @@ describe('content script: formless login pattern', () => {
     loadPracticeTestSite()
     state.reply = (msg) => {
       if (msg['kind'] === 'status') return { ok: true, data: { paired: true, unlocked: true } }
-      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: [] }
+      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: { records: [] } }
       if (msg['kind'] === 'records.consumeCapture') return { ok: true, data: null }
       return { ok: true, data: { id: 'new' } }
     }
@@ -657,7 +710,7 @@ describe('content script: resumes a capture stashed by a previous page', () => {
         return { ok: true, data: { username: 'alice', password: 'hunter2' } }
       }
       if (msg['kind'] === 'status') return { ok: true, data: { paired: true, unlocked: true } }
-      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: [] }
+      if (msg['kind'] === 'records.matchForTab') return { ok: true, data: { records: [] } }
       if (msg['kind'] === 'records.consumeCapture') return { ok: true, data: null }
       return { ok: true, data: { id: 'new' } }
     }

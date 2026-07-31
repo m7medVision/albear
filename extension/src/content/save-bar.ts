@@ -12,6 +12,9 @@ export interface ExistingRecord {
   revision: number
   name: string
   username: string
+  // Carried through unchanged on update — the save bar never sets or clears
+  // a Project ID, only a new record's creation does.
+  projectId?: string
 }
 
 export interface BarCallbacks {
