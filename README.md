@@ -46,6 +46,37 @@ Linux only. The core tools support amd64 and arm64; the desktop packages and
 AppImage currently support amd64. `vaultd` authorizes clients by checking the
 socket peer's credentials, so there is no macOS or Windows build.
 
+### Arch Linux
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/m7medVision/albear/main/install-arch.sh | sh
+```
+
+> **albear is not on the AUR.** New AUR account registration is closed, so the
+> package installs from albear's own PKGBUILD repository
+> ([`packaging/arch`](packaging/arch/PKGBUILD)) instead. Read the script and the
+> PKGBUILD before running them if you like; they are all that runs.
+
+One command installs the `albear-bin` package: the daemon, CLI, native relay,
+systemd user unit, browser extension and, on x86_64, the desktop app. It is
+built on your machine from the latest stable release tag. The script then
+enables the `albear-vaultd` user service and runs `vault install` for every
+supported browser it finds. Chromium, Brave and Helium install the extension on
+their next start, and so does Google Chrome, through a system file the package
+installs. Next, run `vault init` or open **Albear**.
+
+With [paru](https://github.com/Morganamilo/paru), the script adds an `[albear]`
+PKGBUILD repository and turns on `Devel` in your user paru config (creating it
+with `Include = /etc/paru.conf` if you had none, and leaving your other
+settings alone). After that, `paru -Syu` updates albear with the rest of your
+system: paru watches the `stable` branch, which only moves when a release is
+promoted, and only installs a release once it is fully published. `vault` tells
+you to run `paru -Syu` when an update is out. Re-running the script is harmless.
+
+Without paru, the script clones the repository and runs `makepkg -si` once.
+Updates are then manual: re-run the script, or install paru and re-run it once
+to switch to `paru -Syu` updates.
+
 ### Core tools
 
 ```sh
