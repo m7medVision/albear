@@ -109,6 +109,8 @@ func dispatch(cmd string, rest []string) int {
 		return cmdDoctor(rest)
 	case "install":
 		return cmdInstall(rest)
+	case "uninstall":
+		return cmdUninstall(rest)
 	case "destroy":
 		return cmdDestroy(rest)
 	case "help", "--help", "-h":
@@ -121,7 +123,7 @@ func dispatch(cmd string, rest []string) int {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `albear (البير) — local encrypted secrets manager
+	fmt.Fprintf(os.Stderr, `albear (البير) — local encrypted secrets manager
 
 Usage:
   vault init | status | unlock | lock | panic-lock
@@ -133,11 +135,16 @@ Usage:
   vault clients list|approve|revoke
   vault backup create|verify|restore <path>
   vault events [--limit N]
-  vault install <browser> [--native-host PATH] [--extension-dir PATH] [--print-only]
+  vault install [browser] [--native-host PATH] [--extension-dir PATH] [--print-only]
+  vault uninstall [browser]
   vault doctor
   vault destroy
   vault version
-`)
+
+Browsers: %s
+  install with no browser sets up each one whose config folder exists;
+  uninstall with no browser acts on all of them.
+`, strings.Join(install.Names(), ", "))
 }
 
 // ---- version -------------------------------------------------------------
@@ -996,48 +1003,117 @@ func cmdDoctor(args []string) int {
 
 // ---- install -----------------------------------------------------------
 
+// splitBrowser takes an optional leading browser name off args; "" means
+// no browser was named.
+func splitBrowser(args []string) (string, []string) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return "", args
+	}
+	return args[0], args[1:]
+}
+
+func browserLabel(name string) string { return strings.ToUpper(name[:1]) + name[1:] }
+
 func cmdInstall(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "vault: install <browser> [--native-host PATH] [--extension-dir PATH] [--print-only]")
-		return exitUsage
+	name, rest := splitBrowser(args)
+	var strategy install.BrowserStrategy
+	if name != "" {
+		s, err := install.Get(name)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "vault:", err)
+			return exitUsage
+		}
+		strategy = s
 	}
-	name := args[0]
-	strategy, err := install.Get(name)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "vault:", err)
-		return exitUsage
-	}
-	fs := flag.NewFlagSet("install "+name, flag.ContinueOnError)
+	fs := flag.NewFlagSet(strings.TrimSpace("install "+name), flag.ContinueOnError)
 	nativeHost := fs.String("native-host", "", "path to vault-native")
 	extensionDir := fs.String("extension-dir", "", "path to built extension directory")
 	printOnly := fs.Bool("print-only", false, "validate and print install paths without writing")
-	if fs.Parse(args[1:]) != nil {
+	if fs.Parse(rest) != nil {
 		return exitUsage
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "vault: install", name, "does not accept positional arguments")
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "vault: install [browser] [--native-host PATH] [--extension-dir PATH] [--print-only]")
+		} else {
+			fmt.Fprintln(os.Stderr, "vault: install", name, "does not accept positional arguments")
+		}
 		return exitUsage
 	}
-	result, err := install.Install(strategy, install.Options{
+	opts := install.Options{
 		NativeHostPath: *nativeHost,
 		ExtensionDir:   *extensionDir,
 		PrintOnly:      *printOnly,
-	})
-	if err != nil {
-		return fail(err)
 	}
-	label := strings.ToUpper(name[:1]) + name[1:]
-	if result.WroteManifest {
-		fmt.Println(label, "native host installed:", result.ManifestPath)
+
+	// A named browser is set up even if its config folder is missing; with
+	// no name, only browsers whose config folder exists are.
+	var results []install.Result
+	var skipped []install.Skipped
+	if strategy != nil {
+		result, err := install.Install(strategy, opts)
+		if err != nil {
+			return fail(err)
+		}
+		results = []install.Result{result}
 	} else {
-		fmt.Println(label, "native host manifest:", result.ManifestPath)
+		var err error
+		if results, skipped, err = install.InstallDetected(opts); err != nil {
+			return fail(err)
+		}
 	}
+	for _, result := range results {
+		label := browserLabel(result.Browser)
+		if result.WroteManifest {
+			fmt.Println(label, "native host installed:", result.ManifestPath)
+		} else {
+			fmt.Println(label, "native host manifest:", result.ManifestPath)
+		}
+	}
+	for _, s := range skipped {
+		fmt.Println(browserLabel(s.Browser), "skipped: no config folder at", s.ConfigDir)
+	}
+	if len(results) == 0 {
+		fmt.Fprintf(os.Stderr, "vault: no supported browser found; name one: vault install <%s>\n", strings.Join(install.Names(), "|"))
+		return exitNotFound
+	}
+	result := results[0]
 	fmt.Println("vault-native:", result.NativeHostPath)
 	fmt.Println("extension ID:", result.ExtensionID)
 	fmt.Println("extension dir:", result.ExtensionDir)
 	fmt.Println()
 	fmt.Println("Open the browser's extensions page, enable Developer mode, choose Load unpacked, then select:")
 	fmt.Println(result.ExtensionDir)
+	return exitOK
+}
+
+func cmdUninstall(args []string) int {
+	name, rest := splitBrowser(args)
+	if len(rest) != 0 {
+		fmt.Fprintln(os.Stderr, "vault: uninstall [browser]")
+		return exitUsage
+	}
+	strategies := install.All()
+	if name != "" {
+		s, err := install.Get(name)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "vault:", err)
+			return exitUsage
+		}
+		strategies = []install.BrowserStrategy{s}
+	}
+	for _, s := range strategies {
+		result, err := install.Uninstall(s, install.Identity{})
+		if err != nil {
+			return fail(err)
+		}
+		label := browserLabel(result.Browser)
+		if result.RemovedManifest {
+			fmt.Println(label, "native host removed:", result.ManifestPath)
+		} else {
+			fmt.Println(label, "native host not installed")
+		}
+	}
 	return exitOK
 }
 

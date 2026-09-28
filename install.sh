@@ -117,5 +117,5 @@ else
   printf '    vaultd &                                      # start the daemon\n'
 fi
 printf '    vault init                                    # create the vault\n'
-printf '    vault install chrome                          # wire up the extension\n\n'
+printf '    vault install                                 # wire up the extension\n\n'
 printf 'The vault has no recovery path without a backup. Keep the master password safe.\n'
