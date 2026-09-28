@@ -151,3 +151,18 @@ export const daemonServiceCommand = {
   statusArgs: STATUS_ARGS,
   setupArgs: SETUP_ARGS,
 } as const;
+
+// The systemd user unit runs the prod daemon only; a dev daemon is started by
+// hand (`make devd`). In dev the app therefore never offers to enable the
+// service — that would start the prod daemon, not the one this app dials.
+export const devDaemonService = {
+  async status(): Promise<DaemonServiceStatus> {
+    return { state: 'unsupported' };
+  },
+  async setup(): Promise<DaemonServiceStatus> {
+    throw new DaemonServiceError(
+      'SERVICE_UNSUPPORTED',
+      'the background service runs the prod vault only; start the dev daemon by hand',
+    );
+  },
+};

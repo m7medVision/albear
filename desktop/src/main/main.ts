@@ -9,7 +9,7 @@
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
 import path from 'path';
-import { app, BrowserWindow, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, shell, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
@@ -18,6 +18,12 @@ import { VaultClient } from './vaultClient';
 import { registerVaultIpc } from './ipc';
 import { shouldUseDesktopAutoUpdater } from './updater';
 import { registerDaemonServiceIpc } from './daemonServiceIpc';
+import { DaemonServiceController, devDaemonService } from './daemonService';
+import {
+  defaultSocketPath,
+  Environment,
+  resolveEnvironment,
+} from './environment';
 
 /**
  * Auto-updates. Checks GitHub releases (electron-builder `publish` config),
@@ -65,13 +71,37 @@ class AppUpdater {
   }
 }
 
+/**
+ * The environment decides which vault this app opens, so an invalid
+ * ALBEAR_ENV stops the app with a visible error instead of guessing.
+ * showErrorBox is safe before `ready`, and blocks until dismissed.
+ */
+function environmentOrExit(): Environment {
+  try {
+    return resolveEnvironment(app.isPackaged);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`albear: ${message}`);
+    dialog.showErrorBox('Albear cannot start', message);
+    return process.exit(1);
+  }
+}
+
+const environment = environmentOrExit();
+
+// Dev gets its own title so it is told apart from the prod app in the task
+// switcher; the page's <title> would otherwise replace it (see createWindow).
+const WINDOW_TITLE = environment === 'dev' ? 'Albear (dev)' : 'Albear';
+
 let mainWindow: BrowserWindow | null = null;
 
 // One shared connection to the local vaultd daemon. It dials lazily on the
 // first request and reconnects on demand, so construction is safe here.
-const vaultClient = new VaultClient();
+const vaultClient = new VaultClient(defaultSocketPath(environment));
 registerVaultIpc(vaultClient);
-registerDaemonServiceIpc();
+registerDaemonServiceIpc(
+  environment === 'prod' ? new DaemonServiceController() : devDaemonService,
+);
 
 ipcMain.on('updater:quit-and-install', () => {
   if (app.isPackaged) {
@@ -104,8 +134,11 @@ const createWindow = async () => {
     show: false,
     width: 1024,
     height: 728,
+    title: WINDOW_TITLE,
     icon: getAssetPath('icon.png'),
     webPreferences: {
+      // Read by the preload to expose the environment to the renderer badge.
+      additionalArguments: [`--albear-env=${environment}`],
       preload: app.isPackaged
         ? path.join(__dirname, 'preload.js')
         : path.join(__dirname, '../../.erb/dll/preload.js'),
@@ -118,6 +151,10 @@ const createWindow = async () => {
       webSecurity: true,
     },
   });
+
+  // Keep WINDOW_TITLE: the document's static <title> must not overwrite the
+  // dev marker once the page loads.
+  mainWindow.on('page-title-updated', (event) => event.preventDefault());
 
   mainWindow.loadURL(resolveHtmlPath('index.html'));
 

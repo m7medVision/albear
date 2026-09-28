@@ -18,6 +18,14 @@ import type {
   SecretView,
   UpdateFields,
 } from '../shared/vaultTypes';
+import type { Environment } from './environment';
+
+// main.ts passes the environment as `--albear-env=<env>` (additionalArguments).
+// Only the two known values are trusted; anything else reads as prod, which
+// merely hides the DEV badge — the socket choice was already made in main.
+const environment: Environment = process.argv.includes('--albear-env=dev')
+  ? 'dev'
+  : 'prod';
 
 export type Channels =
   | 'updater:update-available'
@@ -52,6 +60,8 @@ export type ElectronHandler = typeof electronHandler;
 // Typed vault API. Only plain data crosses this bridge; the socket and the
 // Noise session stay in the main process (see src/main/vaultClient.ts).
 const albearHandler = {
+  // Which vault this window talks to; the renderer marks dev with a badge.
+  environment,
   status: (): Promise<AlbearResult<DesktopStatus>> =>
     ipcRenderer.invoke('albear:status'),
   daemonServiceStatus: (): Promise<AlbearResult<DaemonServiceStatus>> =>
