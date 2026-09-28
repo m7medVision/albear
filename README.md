@@ -173,16 +173,20 @@ make dev-ext          # cd extension && pnpm dev     (Vite, rebuilds on save)
 make dev-desktop      # cd desktop && npm start      (Electron + hot reload)
 ```
 
-## Install the extension in Chrome (dev)
+## Install the extension in a Chromium-family browser (dev)
+
+Supported browsers: `chrome`, `chromium`, `brave`, `helium`.
 
 ```sh
 make build
 make devd &                         # daemon must be running to pair
 ./vault install chrome --print-only # prints the native-host + extension paths
 ./vault install chrome              # writes the native-messaging manifest
+./vault install                     # or: every supported browser found in ~/.config
+./vault uninstall [browser]         # removes the manifest again (default: all)
 ```
 
-Then in Chrome:
+Then in the browser:
 
 1. Open `chrome://extensions`, enable **Developer mode**.
 2. **Load unpacked** → select the `extension/dist` path printed above.
