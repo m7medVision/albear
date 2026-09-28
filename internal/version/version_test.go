@@ -114,3 +114,58 @@ func TestReleaseVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestEnvironmentOf(t *testing.T) {
+	// A real release version is prod; the "dev" placeholder, and anything
+	// else that is not a version, is dev so it can never reach the prod vault.
+	for v, want := range map[string]Environment{
+		"v1.2.3":      Prod,
+		"v0.1.0":      Prod,
+		"v1.2.3-rc.1": Prod,
+		"1.2.3":       Prod,
+		"dev":         Dev,
+		"":            Dev,
+		"garbage":     Dev,
+	} {
+		if got := EnvironmentOf(v); got != want {
+			t.Errorf("EnvironmentOf(%q) = %q, want %q", v, got, want)
+		}
+	}
+}
+
+func TestCurrentEnvironment(t *testing.T) {
+	cases := []struct {
+		name    string
+		version string
+		env     string
+		want    Environment
+		wantErr bool
+	}{
+		{name: "release is prod", version: "v1.2.3", want: Prod},
+		{name: "placeholder is dev", version: "dev", want: Dev},
+		{name: "empty override is unset", version: "v1.2.3", env: "", want: Prod},
+		{name: "override to dev", version: "v1.2.3", env: "dev", want: Dev},
+		{name: "override to prod", version: "dev", env: "prod", want: Prod},
+		{name: "invalid override", version: "v1.2.3", env: "production", wantErr: true},
+		{name: "override is case-sensitive", version: "dev", env: "DEV", wantErr: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			old := Version
+			Version = c.version
+			t.Cleanup(func() { Version = old })
+			t.Setenv(EnvVar, c.env)
+
+			got, err := CurrentEnvironment()
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("CurrentEnvironment() = %q, want error", got)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Fatalf("CurrentEnvironment() = (%q, %v), want %q", got, err, c.want)
+			}
+		})
+	}
+}

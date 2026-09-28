@@ -132,7 +132,7 @@ cd desktop && npm install && npm run build
 ## Run
 
 ```sh
-./vaultd &                              # serves $XDG_RUNTIME_DIR/albear/vault.sock
+./vaultd &                              # local build: $XDG_RUNTIME_DIR/albear-dev/vault.sock
 ./vault init                            # create the vault (no recovery without backup!)
 ./vault unlock
 ./vault add login --name GitHub --username you --url https://github.com --generate
@@ -172,6 +172,18 @@ make devd             # go run ./cmd/vaultd         (the daemon)
 make dev-ext          # cd extension && pnpm dev     (Vite, rebuilds on save)
 make dev-desktop      # cd desktop && npm start      (Electron + hot reload)
 ```
+
+### Dev and prod environments
+
+Anything built locally runs in the **dev** environment; release builds (and
+`go install …@vX.Y.Z`) run in **prod**. Dev keeps its vault, config and socket
+under `albear-dev` instead of `albear` (e.g. `~/.local/share/albear-dev`), so a
+dev daemon runs next to the prod service and never touches your real vault.
+Every dev CLI command prints a `[dev]` line on stderr, and the unpackaged
+desktop app shows a DEV badge.
+
+Set `ALBEAR_ENV=dev` or `ALBEAR_ENV=prod` to override (e.g. to point a release
+build at the dev vault). Any other value is an error.
 
 ## Install the extension in Chrome (dev)
 

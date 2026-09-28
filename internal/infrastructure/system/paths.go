@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/m7medVision/albear/internal/version"
 )
 
 // Paths are the resolved storage locations. None of them are secret; the
 // contents are protected cryptographically.
 type Paths struct {
+	// Env is the environment the paths belong to; dev and prod never share a
+	// folder, so a dev build cannot open the prod vault.
+	Env        version.Environment
 	DataDir    string
 	ConfigDir  string
 	RuntimeDir string
@@ -21,8 +26,15 @@ func (p Paths) Socket() string    { return filepath.Join(p.RuntimeDir, "vault.so
 func (p Paths) StaticKey() string { return filepath.Join(p.ConfigDir, "daemon.key") }
 func (p Paths) ClientDir() string { return filepath.Join(p.ConfigDir, "clients") }
 
-// ResolvePaths applies the XDG spec with home fallbacks.
+// ResolvePaths applies the XDG spec with home fallbacks, for the environment
+// this process runs in (version.CurrentEnvironment). Prod uses "albear"
+// folders, as every release always has; dev uses "albear-dev" in the same
+// places. An invalid ALBEAR_ENV is an error.
 func ResolvePaths() (Paths, error) {
+	env, err := version.CurrentEnvironment()
+	if err != nil {
+		return Paths{}, err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return Paths{}, err
@@ -35,15 +47,26 @@ func ResolvePaths() (Paths, error) {
 	if config == "" {
 		config = filepath.Join(home, ".config")
 	}
+	name := dirName(env)
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
 	if runtime == "" {
-		runtime = filepath.Join(data, "albear", "run")
+		runtime = filepath.Join(data, name, "run")
 	}
 	return Paths{
-		DataDir:    filepath.Join(data, "albear"),
-		ConfigDir:  filepath.Join(config, "albear"),
-		RuntimeDir: filepath.Join(runtime, "albear"),
+		Env:        env,
+		DataDir:    filepath.Join(data, name),
+		ConfigDir:  filepath.Join(config, name),
+		RuntimeDir: filepath.Join(runtime, name),
 	}, nil
+}
+
+// dirName is the per-environment folder name used under each XDG base. The
+// desktop app mirrors it (desktop/src/main/environment.ts).
+func dirName(env version.Environment) string {
+	if env == version.Dev {
+		return "albear-dev"
+	}
+	return "albear"
 }
 
 // Prepare creates every directory with 0700 and verifies the modes.

@@ -39,6 +39,19 @@ const (
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	// Resolve the environment before anything else: an invalid ALBEAR_ENV
+	// must stop every command, and a dev build announces itself on each one
+	// (on stderr, so stdout stays scriptable) so a dev vault is never
+	// mistaken for the real one.
+	env, err := version.CurrentEnvironment()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "vault:", err)
+		return exitUsage
+	}
+	if env == version.Dev {
+		fmt.Fprintln(os.Stderr, "[dev] using the dev vault (albear-dev)")
+	}
+
 	if len(args) == 0 {
 		usage()
 		return exitUsage
