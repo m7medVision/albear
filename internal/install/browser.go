@@ -17,11 +17,21 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/m7medVision/albear/internal/version"
 )
 
 const (
+	// ChromeExtensionID is the prod extension, pinned by PROD_PUBLIC_KEY in
+	// extension/build/target.ts.
 	ChromeExtensionID = "iblbbooeonkneacnoakpkkpdpehdhdna"
 	NativeHostName    = "dev.albear.native"
+
+	// DevExtensionID is the dev extension, pinned by DEV_PUBLIC_KEY in
+	// extension/build/target.ts and signed by the committed
+	// extension/keys/dev.pem.
+	DevExtensionID    = "ohcnnpelgjehhoejpajdkmeejklpaden"
+	DevNativeHostName = "dev.albear.native_dev"
 )
 
 // Identity is the native host / extension pair a manifest is written for.
@@ -32,8 +42,22 @@ type Identity struct {
 	ExtensionID string
 }
 
-// DefaultIdentity is used whenever an Identity is left zero.
-var DefaultIdentity = Identity{HostName: NativeHostName, ExtensionID: ChromeExtensionID}
+var (
+	// DefaultIdentity is the prod identity, used whenever an Identity is
+	// left zero.
+	DefaultIdentity = Identity{HostName: NativeHostName, ExtensionID: ChromeExtensionID}
+	// DevIdentity is the dev extension and its own native host, so the dev
+	// and prod extensions can be installed side by side.
+	DevIdentity = Identity{HostName: DevNativeHostName, ExtensionID: DevExtensionID}
+)
+
+// IdentityFor is the identity a CLI of the given environment installs.
+func IdentityFor(env version.Environment) Identity {
+	if env == version.Dev {
+		return DevIdentity
+	}
+	return DefaultIdentity
+}
 
 func (id Identity) orDefault() Identity {
 	if id == (Identity{}) {

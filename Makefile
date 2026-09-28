@@ -17,6 +17,8 @@ dev-ext:
 dev-desktop:
 	cd desktop && npm start
 
+# The extension build is dev unless ALBEAR_ENV / ALBEAR_VERSION say otherwise,
+# e.g. ALBEAR_VERSION=v1.4.2 make extension (see extension/build/target.ts).
 extension:
 	cd extension && pnpm install && pnpm build
 

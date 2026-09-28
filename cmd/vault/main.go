@@ -1014,6 +1014,16 @@ func splitBrowser(args []string) (string, []string) {
 
 func browserLabel(name string) string { return strings.ToUpper(name[:1]) + name[1:] }
 
+// installIdentity is the extension and native host this CLI's environment
+// installs: a dev build sets up the dev extension, never the prod one.
+func installIdentity() (install.Identity, error) {
+	env, err := version.CurrentEnvironment()
+	if err != nil {
+		return install.Identity{}, err
+	}
+	return install.IdentityFor(env), nil
+}
+
 func cmdInstall(args []string) int {
 	name, rest := splitBrowser(args)
 	var strategy install.BrowserStrategy
@@ -1040,10 +1050,15 @@ func cmdInstall(args []string) int {
 		}
 		return exitUsage
 	}
+	id, err := installIdentity()
+	if err != nil {
+		return fail(err)
+	}
 	opts := install.Options{
 		NativeHostPath: *nativeHost,
 		ExtensionDir:   *extensionDir,
 		PrintOnly:      *printOnly,
+		Identity:       id,
 	}
 
 	// A named browser is set up even if its config folder is missing; with
@@ -1057,7 +1072,6 @@ func cmdInstall(args []string) int {
 		}
 		results = []install.Result{result}
 	} else {
-		var err error
 		if results, skipped, err = install.InstallDetected(opts); err != nil {
 			return fail(err)
 		}
@@ -1102,8 +1116,12 @@ func cmdUninstall(args []string) int {
 		}
 		strategies = []install.BrowserStrategy{s}
 	}
+	id, err := installIdentity()
+	if err != nil {
+		return fail(err)
+	}
 	for _, s := range strategies {
-		result, err := install.Uninstall(s, install.Identity{})
+		result, err := install.Uninstall(s, id)
 		if err != nil {
 			return fail(err)
 		}

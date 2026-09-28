@@ -189,6 +189,15 @@ build at the dev vault). Any other value is an error.
 
 Supported browsers: `chrome`, `chromium`, `brave`, `helium`.
 
+The extension build is per environment, like the binaries. A plain build is
+**dev**: named "albear (dev)", extension ID `ohcnnpelgjehhoejpajdkmeejklpaden`,
+native host `dev.albear.native_dev`, and a DEV badge on its icon, so it runs
+next to the prod extension in one browser profile. `ALBEAR_VERSION=v1.4.2`
+makes a prod build (manifest version `1.4.2`; prerelease suffixes are
+dropped), and `ALBEAR_ENV=dev|prod` overrides the environment. A dev `vault`
+installs the dev native host, a release `vault` the prod one. The dev signing
+key is committed at `extension/keys/dev.pem` on purpose: it only protects dev.
+
 ```sh
 make build
 make devd &                         # daemon must be running to pair

@@ -13,8 +13,14 @@ beforeEach(async () => {
   ;(globalThis as unknown as { chrome: unknown }).chrome = {
     runtime: {
       onMessage: { addListener: () => undefined },
+      onStartup: { addListener: () => undefined },
+      onInstalled: { addListener: () => undefined },
       connectNative: () => ({}),
       sendMessage: () => Promise.resolve(),
+    },
+    action: {
+      setBadgeText: () => Promise.resolve(),
+      setBadgeBackgroundColor: () => Promise.resolve(),
     },
   }
   policy = await import('../src/background/index')

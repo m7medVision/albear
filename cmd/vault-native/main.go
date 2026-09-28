@@ -14,9 +14,13 @@ import (
 	"github.com/m7medVision/albear/internal/version"
 )
 
-// productionChromeIDs is the exact allowlist baked into release builds.
+// chromeIDs is the exact allowlist for this relay's environment: a prod relay
+// only admits the prod extension and a dev relay only the dev one, matching
+// the native-host manifest `vault install` wrote for that environment.
 // ALBEAR_EXTENSION_IDS overrides it for development only.
-var productionChromeIDs = []string{install.ChromeExtensionID}
+func chromeIDs(env version.Environment) []string {
+	return []string{install.IdentityFor(env).ExtensionID}
+}
 
 // productionFirefoxIDs is empty: no Firefox build yet. When Firefox lands,
 // append the addon ID here and add a native.FirefoxValidator to the
@@ -37,12 +41,16 @@ func main() {
 }
 
 func run() error {
-	chromeIDs := productionChromeIDs
-	if env := os.Getenv("ALBEAR_EXTENSION_IDS"); env != "" {
-		chromeIDs = strings.Split(env, ",")
+	env, err := version.CurrentEnvironment()
+	if err != nil {
+		return err
+	}
+	allowed := chromeIDs(env)
+	if ids := os.Getenv("ALBEAR_EXTENSION_IDS"); ids != "" {
+		allowed = strings.Split(ids, ",")
 	}
 
-	candidates := callerValidators(chromeIDs, productionFirefoxIDs)
+	candidates := callerValidators(allowed, productionFirefoxIDs)
 	if len(candidates) == 0 {
 		return fmt.Errorf("vault-native: no caller allowlist configured")
 	}

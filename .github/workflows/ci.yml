@@ -38,6 +38,9 @@ jobs:
               - 'cmd/**'
               - 'internal/**'
               - 'tools/noisevectors/**'
+              # Go tests check the extension IDs against these keys.
+              - 'extension/keys/**'
+              - 'extension/build/target.ts'
               - 'go.mod'
               - 'go.sum'
               - 'sqlc.yaml'

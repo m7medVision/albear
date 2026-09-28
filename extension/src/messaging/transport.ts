@@ -2,8 +2,11 @@
 // Noise frames travel base64-wrapped through the vault-native blind relay
 // (PRD 12.2). The relay sees ciphertext only.
 import { CipherState, XXHandshake, type KeyPair } from '../noise/noise'
+import { BUILD } from '../build-info'
 
-export const NATIVE_HOST = 'dev.albear.native'
+// The native host name is per environment: dev.albear.native (prod) or
+// dev.albear.native_dev (dev).
+export const NATIVE_HOST = BUILD.nativeHost
 
 export interface Port {
   postMessage(msg: unknown): void
