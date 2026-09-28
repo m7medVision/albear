@@ -194,26 +194,38 @@ The extension build is per environment, like the binaries. A plain build is
 native host `dev.albear.native_dev`, and a DEV badge on its icon, so it runs
 next to the prod extension in one browser profile. `ALBEAR_VERSION=v1.4.2`
 makes a prod build (manifest version `1.4.2`; prerelease suffixes are
-dropped), and `ALBEAR_ENV=dev|prod` overrides the environment. A dev `vault`
-installs the dev native host, a release `vault` the prod one. The dev signing
+dropped), and `ALBEAR_ENV=dev|prod` overrides the environment. The dev signing
 key is committed at `extension/keys/dev.pem` on purpose: it only protects dev.
 
 ```sh
 make build
+make crx                            # builds extension/dist and signs extension/albear.crx with the dev key
 make devd &                         # daemon must be running to pair
-./vault install chrome --print-only # prints the native-host + extension paths
-./vault install chrome              # writes the native-messaging manifest
+./vault install helium --print-only # prints the paths without writing
+./vault install helium              # native-messaging manifest + External Extensions entry
 ./vault install                     # or: every supported browser found in ~/.config
-./vault uninstall [browser]         # removes the manifest again (default: all)
+./vault uninstall [browser]         # removes both again (default: all)
 ```
 
-Then in the browser:
+A dev `vault` installs the dev extension and native host; a release `vault`
+installs the prod ones. Chromium, Brave and Helium install the signed `.crx`
+from their per-user `External Extensions` folder on their next start, with no
+clicks. Google Chrome on Linux only reads a root-owned folder, so
+`vault install chrome` prints the one `sudo` command that registers it.
+Without flags, install looks for the `.crx`, unpacked extension and
+`vault-native` in the package locations (`/usr/share/albear/albear.crx`,
+`/usr/share/albear/extension`, `/usr/bin/vault-native`), then in the repo
+build outputs; `--crx`, `--extension-dir` and `--native-host` override them.
 
-1. Open `chrome://extensions`, enable **Developer mode**.
-2. **Load unpacked** → select the `extension/dist` path printed above.
-3. Open the popup → **Pair with vaultd**.
-4. In a terminal run `./vault clients approve` and confirm the phrase matches
+After restarting the browser:
+
+1. Open the popup → **Pair with vaultd**.
+2. In a terminal run `./vault clients approve` and confirm the phrase matches
    on both sides.
+
+To load the unpacked build instead (e.g. with `make dev-ext`), open
+`chrome://extensions`, enable **Developer mode**, **Load unpacked** →
+`extension/dist`.
 
 ## Run the desktop app
 

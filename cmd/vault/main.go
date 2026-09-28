@@ -135,7 +135,7 @@ Usage:
   vault clients list|approve|revoke
   vault backup create|verify|restore <path>
   vault events [--limit N]
-  vault install [browser] [--native-host PATH] [--extension-dir PATH] [--print-only]
+  vault install [browser] [--crx PATH] [--native-host PATH] [--extension-dir PATH] [--print-only]
   vault uninstall [browser]
   vault doctor
   vault destroy
@@ -143,7 +143,9 @@ Usage:
 
 Browsers: %s
   install with no browser sets up each one whose config folder exists;
-  uninstall with no browser acts on all of them.
+  uninstall with no browser acts on all of them. Chromium, Brave and Helium
+  install the signed extension on their next start; Chrome needs one sudo
+  command, which install prints.
 `, strings.Join(install.Names(), ", "))
 }
 
@@ -1036,6 +1038,7 @@ func cmdInstall(args []string) int {
 		strategy = s
 	}
 	fs := flag.NewFlagSet(strings.TrimSpace("install "+name), flag.ContinueOnError)
+	crxPath := fs.String("crx", "", "path to the signed extension package (.crx)")
 	nativeHost := fs.String("native-host", "", "path to vault-native")
 	extensionDir := fs.String("extension-dir", "", "path to built extension directory")
 	printOnly := fs.Bool("print-only", false, "validate and print install paths without writing")
@@ -1044,7 +1047,7 @@ func cmdInstall(args []string) int {
 	}
 	if fs.NArg() != 0 {
 		if name == "" {
-			fmt.Fprintln(os.Stderr, "vault: install [browser] [--native-host PATH] [--extension-dir PATH] [--print-only]")
+			fmt.Fprintln(os.Stderr, "vault: install [browser] [--crx PATH] [--native-host PATH] [--extension-dir PATH] [--print-only]")
 		} else {
 			fmt.Fprintln(os.Stderr, "vault: install", name, "does not accept positional arguments")
 		}
@@ -1057,6 +1060,7 @@ func cmdInstall(args []string) int {
 	opts := install.Options{
 		NativeHostPath: *nativeHost,
 		ExtensionDir:   *extensionDir,
+		CRXPath:        *crxPath,
 		PrintOnly:      *printOnly,
 		Identity:       id,
 	}
@@ -1076,12 +1080,29 @@ func cmdInstall(args []string) int {
 			return fail(err)
 		}
 	}
+	manual := false
 	for _, result := range results {
 		label := browserLabel(result.Browser)
 		if result.WroteManifest {
 			fmt.Println(label, "native host installed:", result.ManifestPath)
 		} else {
 			fmt.Println(label, "native host manifest:", result.ManifestPath)
+		}
+		switch result.Extension {
+		case install.ExtensionRegistered:
+			if result.WroteExternal {
+				fmt.Printf("%s extension %s registered: %s (restart %s to install it)\n", label, result.ExtensionVersion, result.ExternalPath, label)
+			} else {
+				fmt.Printf("%s extension %s registration: %s\n", label, result.ExtensionVersion, result.ExternalPath)
+			}
+		case install.ExtensionSystemPresent:
+			fmt.Println(label, "extension set up by", result.ExternalPath)
+		case install.ExtensionNeedsSudo:
+			fmt.Println(label, "extension: Chrome only installs it from a root-owned file; run once, then restart Chrome:")
+			fmt.Println("  " + result.SudoCommand)
+		default:
+			manual = true
+			fmt.Println(label, "extension: no signed .crx found (make crx, or pass --crx); load it unpacked")
 		}
 	}
 	for _, s := range skipped {
@@ -1092,12 +1113,24 @@ func cmdInstall(args []string) int {
 		return exitNotFound
 	}
 	result := results[0]
+	fmt.Println()
 	fmt.Println("vault-native:", result.NativeHostPath)
 	fmt.Println("extension ID:", result.ExtensionID)
-	fmt.Println("extension dir:", result.ExtensionDir)
-	fmt.Println()
-	fmt.Println("Open the browser's extensions page, enable Developer mode, choose Load unpacked, then select:")
-	fmt.Println(result.ExtensionDir)
+	if result.CRXPath != "" {
+		fmt.Println("extension package:", result.CRXPath)
+	}
+	if result.ExtensionDir != "" {
+		fmt.Println("extension dir:", result.ExtensionDir)
+	}
+	if manual {
+		fmt.Println()
+		if result.ExtensionDir != "" {
+			fmt.Println("Open the browser's extensions page, enable Developer mode, choose Load unpacked, then select:")
+			fmt.Println(result.ExtensionDir)
+		} else {
+			fmt.Println("No unpacked extension found either; build it (make extension) or pass --extension-dir.")
+		}
+	}
 	return exitOK
 }
 
@@ -1121,7 +1154,7 @@ func cmdUninstall(args []string) int {
 		return fail(err)
 	}
 	for _, s := range strategies {
-		result, err := install.Uninstall(s, id)
+		result, err := install.Uninstall(s, install.Options{Identity: id})
 		if err != nil {
 			return fail(err)
 		}
@@ -1130,6 +1163,12 @@ func cmdUninstall(args []string) int {
 			fmt.Println(label, "native host removed:", result.ManifestPath)
 		} else {
 			fmt.Println(label, "native host not installed")
+		}
+		if result.RemovedExternal {
+			fmt.Printf("%s extension unregistered (restart %s to remove it)\n", label, label)
+		}
+		if result.SystemExternalPath != "" {
+			fmt.Printf("%s extension is still set up by the root-owned %s (removed with the albear package; otherwise: sudo rm %s)\n", label, result.SystemExternalPath, result.SystemExternalPath)
 		}
 	}
 	return exitOK

@@ -13,6 +13,7 @@ coverage.*
 # Node
 node_modules/
 extension/dist/
+extension/albear.crx
 
 # Desktop (Electron)
 desktop/release/build/

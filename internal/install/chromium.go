@@ -18,10 +18,14 @@ type chromiumFamily struct {
 	// externalExtensions is whether the browser honours a per-user
 	// "External Extensions" folder inside its config folder.
 	externalExtensions bool
+	// systemExtensionsDir is the root-owned external-extensions folder, for
+	// a browser with no per-user one.
+	systemExtensionsDir string
 }
 
 func (b chromiumFamily) Name() string                     { return b.name }
 func (b chromiumFamily) SupportsExternalExtensions() bool { return b.externalExtensions }
+func (b chromiumFamily) SystemExtensionsDir() string      { return b.systemExtensionsDir }
 
 func (b chromiumFamily) ConfigDir() (string, error) {
 	if runtime.GOOS != "linux" {

@@ -20,7 +20,8 @@ var browserConfigDirs = map[string]string{
 }
 
 // installFixture points XDG_CONFIG_HOME at a temp dir and returns it with
-// Options naming a fake executable native host and extension dir.
+// Options naming a fake executable native host and extension dir, and an
+// empty system root so nothing installed on the machine leaks in.
 func installFixture(t *testing.T) (string, Options) {
 	t.Helper()
 	dir := t.TempDir()
@@ -34,7 +35,8 @@ func installFixture(t *testing.T) (string, Options) {
 	}
 	config := filepath.Join(dir, "config")
 	t.Setenv("XDG_CONFIG_HOME", config)
-	return config, Options{NativeHostPath: hostPath, ExtensionDir: extDir}
+	root := filepath.Join(dir, "root")
+	return config, Options{NativeHostPath: hostPath, ExtensionDir: extDir, SystemRoot: root}
 }
 
 func manifestFor(config, browser, host string) string {
@@ -107,7 +109,7 @@ func TestInstallAndUninstallPerBrowser(t *testing.T) {
 				}
 			}
 
-			un, err := Uninstall(s, Identity{})
+			un, err := Uninstall(s, Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -122,7 +124,7 @@ func TestInstallAndUninstallPerBrowser(t *testing.T) {
 				t.Fatal("uninstall removed the NativeMessagingHosts folder")
 			}
 
-			un, err = Uninstall(s, Identity{})
+			un, err = Uninstall(s, Options{})
 			if err != nil {
 				t.Fatalf("second uninstall: %v", err)
 			}
@@ -176,10 +178,10 @@ func TestInstallUsesIdentity(t *testing.T) {
 	}
 
 	// Uninstall is scoped to the identity it is given.
-	if un, err := Uninstall(s, Identity{}); err != nil || un.RemovedManifest {
+	if un, err := Uninstall(s, Options{}); err != nil || un.RemovedManifest {
 		t.Fatalf("default-identity uninstall = %+v, %v; want nothing removed", un, err)
 	}
-	if un, err := Uninstall(s, opts.Identity); err != nil || !un.RemovedManifest {
+	if un, err := Uninstall(s, opts); err != nil || !un.RemovedManifest {
 		t.Fatalf("custom-identity uninstall = %+v, %v; want manifest removed", un, err)
 	}
 }
@@ -261,7 +263,7 @@ func TestUninstallAllRemovesOnlyManifests(t *testing.T) {
 
 	removed := map[string]bool{}
 	for _, s := range All() {
-		res, err := Uninstall(s, Identity{})
+		res, err := Uninstall(s, Options{})
 		if err != nil {
 			t.Fatalf("uninstall %s: %v", s.Name(), err)
 		}

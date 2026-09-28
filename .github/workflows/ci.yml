@@ -38,6 +38,7 @@ jobs:
               - 'cmd/**'
               - 'internal/**'
               - 'tools/noisevectors/**'
+              - 'tools/crxpack/**'
               # Go tests check the extension IDs against these keys.
               - 'extension/keys/**'
               - 'extension/build/target.ts'

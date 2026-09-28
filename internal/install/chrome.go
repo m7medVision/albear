@@ -1,8 +1,13 @@
 package install
 
 // chrome describes Google Chrome within the Chromium family. Chrome on
-// Linux has no per-user External Extensions folder.
-var chrome = chromiumFamily{name: "chrome", configDir: "google-chrome"}
+// Linux has no per-user External Extensions folder, only the root-owned
+// system one (which the Arch package fills).
+var chrome = chromiumFamily{
+	name:                "chrome",
+	configDir:           "google-chrome",
+	systemExtensionsDir: "/usr/share/google-chrome/extensions",
+}
 
 // Chrome is the BrowserStrategy for Google Chrome. It stays a named type
 // (rather than a bare chromiumFamily value like the other browsers) so
@@ -15,6 +20,7 @@ func (Chrome) ConfigDir() (string, error)          { return chrome.ConfigDir() }
 func (Chrome) NativeHostsDir() (string, error)     { return chrome.NativeHostsDir() }
 func (Chrome) ManifestPath() (string, error)       { return chrome.ManifestPath() }
 func (Chrome) SupportsExternalExtensions() bool    { return chrome.SupportsExternalExtensions() }
+func (Chrome) SystemExtensionsDir() string         { return chrome.SystemExtensionsDir() }
 func (Chrome) ValidateExtensionID(id string) error { return chrome.ValidateExtensionID(id) }
 
 func (Chrome) BuildAllowedOrigins(extensionID string) ([]string, error) {

@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -69,17 +68,59 @@ func (id Identity) orDefault() Identity {
 type Options struct {
 	NativeHostPath string
 	ExtensionDir   string
-	PrintOnly      bool
-	Identity       Identity // zero means DefaultIdentity
+	// CRXPath is the signed extension package; empty means look it up.
+	CRXPath   string
+	PrintOnly bool
+	Identity  Identity // zero means DefaultIdentity
+	// SystemRoot prefixes every system-wide path Install reads (package
+	// locations, Chrome's external-extension folder); empty means "/".
+	// Install never writes under it.
+	SystemRoot string
 }
+
+func (o Options) system(path string) string {
+	if o.SystemRoot == "" {
+		return path
+	}
+	return filepath.Join(o.SystemRoot, path)
+}
+
+// ExtensionStatus is how a browser will get the extension itself, beside
+// the native-host manifest.
+type ExtensionStatus int
+
+const (
+	// ExtensionManual: no signed .crx was found, so the extension has to be
+	// loaded unpacked from ExtensionDir.
+	ExtensionManual ExtensionStatus = iota
+	// ExtensionRegistered: the .crx and <id>.json are in the browser's
+	// per-user External Extensions folder; it installs on next start.
+	ExtensionRegistered
+	// ExtensionSystemPresent: Chrome's system external-extension file exists.
+	ExtensionSystemPresent
+	// ExtensionNeedsSudo: Chrome's system file is missing; SudoCommand
+	// creates it.
+	ExtensionNeedsSudo
+)
 
 type Result struct {
 	Browser        string
 	ManifestPath   string
 	NativeHostPath string
-	ExtensionDir   string
+	ExtensionDir   string // "" when no unpacked build was found
 	ExtensionID    string
 	WroteManifest  bool
+
+	// CRXPath is the signed package installed from; "" when none was found.
+	CRXPath          string
+	ExtensionVersion string
+	Extension        ExtensionStatus
+	// ExternalPath is the <id>.json that registers the extension: the
+	// per-user one (Registered) or Chrome's system one (SystemPresent,
+	// NeedsSudo).
+	ExternalPath  string
+	WroteExternal bool
+	SudoCommand   string
 }
 
 // UninstallResult reports what Uninstall removed for one browser.
@@ -87,6 +128,12 @@ type UninstallResult struct {
 	Browser         string
 	ManifestPath    string
 	RemovedManifest bool
+	// RemovedExternal is whether the per-user External Extensions
+	// registration (<id>.json and <id>.crx) was removed.
+	RemovedExternal bool
+	// SystemExternalPath is Chrome's system external-extension file when it
+	// still exists; Uninstall never removes it (it is root-owned).
+	SystemExternalPath string
 }
 
 // BrowserStrategy owns everything browser-specific about installing the
@@ -103,6 +150,9 @@ type BrowserStrategy interface {
 	// SupportsExternalExtensions reports whether the browser honours a
 	// per-user "External Extensions" folder (Google Chrome on Linux does not).
 	SupportsExternalExtensions() bool
+	// SystemExtensionsDir is the root-owned external-extensions folder the
+	// browser reads when it has no per-user one; "" when not applicable.
+	SystemExtensionsDir() string
 	BuildAllowedOrigins(extensionID string) ([]string, error)
 	ValidateExtensionID(id string) error
 }
@@ -166,30 +216,44 @@ func Detect(s BrowserStrategy) (bool, error) {
 	return st.IsDir(), nil
 }
 
-// Install writes the native-host manifest for the given strategy.
+// Install writes the native-host manifest for the given strategy and
+// registers the signed extension: in the per-user External Extensions folder
+// where the browser has one, otherwise by checking for Chrome's system file.
 func Install(s BrowserStrategy, opts Options) (Result, error) {
-	hostPath, err := resolveNativeHost(opts.NativeHostPath)
-	if err != nil {
-		return Result{}, err
-	}
-	extDir, err := resolveExtensionDir(opts.ExtensionDir)
-	if err != nil {
-		return Result{}, err
-	}
 	id := opts.Identity.orDefault()
+	if err := s.ValidateExtensionID(id.ExtensionID); err != nil {
+		return Result{}, err
+	}
+	hostPath, err := resolveNativeHost(opts)
+	if err != nil {
+		return Result{}, err
+	}
+	pkg, err := resolveCRX(opts, id)
+	if err != nil {
+		return Result{}, err
+	}
+	extDir, err := resolveExtensionDir(opts, id)
+	if err != nil {
+		return Result{}, err
+	}
+	if extDir == "" && pkg.path == "" {
+		return Result{}, fmt.Errorf("install: could not find the extension %s; build it (make crx) or pass --crx / --extension-dir", id.ExtensionID)
+	}
 	manifestPath, err := manifestPath(s, id)
 	if err != nil {
 		return Result{}, err
 	}
-	if err := s.ValidateExtensionID(id.ExtensionID); err != nil {
-		return Result{}, err
-	}
 	result := Result{
-		Browser:        s.Name(),
-		ManifestPath:   manifestPath,
-		NativeHostPath: hostPath,
-		ExtensionDir:   extDir,
-		ExtensionID:    id.ExtensionID,
+		Browser:          s.Name(),
+		ManifestPath:     manifestPath,
+		NativeHostPath:   hostPath,
+		ExtensionDir:     extDir,
+		ExtensionID:      id.ExtensionID,
+		CRXPath:          pkg.path,
+		ExtensionVersion: pkg.version,
+	}
+	if err := planExtension(s, opts, id, &result); err != nil {
+		return Result{}, err
 	}
 	if opts.PrintOnly {
 		return result, nil
@@ -205,6 +269,12 @@ func Install(s BrowserStrategy, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	result.WroteManifest = true
+	if result.Extension == ExtensionRegistered {
+		if err := writeExternal(result.ExternalPath, pkg); err != nil {
+			return Result{}, err
+		}
+		result.WroteExternal = true
+	}
 	return result, nil
 }
 
@@ -242,22 +312,52 @@ func InstallDetected(opts Options) ([]Result, []Skipped, error) {
 	return results, skipped, nil
 }
 
-// Uninstall removes the native-host manifest Install wrote for the given
-// strategy and identity (zero means DefaultIdentity). Nothing installed is
-// not an error.
-func Uninstall(s BrowserStrategy, id Identity) (UninstallResult, error) {
-	path, err := manifestPath(s, id.orDefault())
+// Uninstall removes what Install wrote for the given strategy and
+// opts.Identity (zero means DefaultIdentity): the native-host manifest and
+// the per-user External Extensions registration. Nothing installed is not an
+// error. Chrome's root-owned system file is only reported.
+func Uninstall(s BrowserStrategy, opts Options) (UninstallResult, error) {
+	id := opts.Identity.orDefault()
+	path, err := manifestPath(s, id)
 	if err != nil {
 		return UninstallResult{}, err
 	}
 	result := UninstallResult{Browser: s.Name(), ManifestPath: path}
-	switch err := os.Remove(path); {
-	case err == nil:
-		result.RemovedManifest = true
-	case !errors.Is(err, fs.ErrNotExist):
+	if result.RemovedManifest, err = removeIfExists(path); err != nil {
 		return UninstallResult{}, err
 	}
+	if s.SupportsExternalExtensions() {
+		jsonPath, crxPath, err := externalPaths(s, id)
+		if err != nil {
+			return UninstallResult{}, err
+		}
+		removedJSON, err := removeIfExists(jsonPath)
+		if err != nil {
+			return UninstallResult{}, err
+		}
+		removedCRX, err := removeIfExists(crxPath)
+		if err != nil {
+			return UninstallResult{}, err
+		}
+		result.RemovedExternal = removedJSON || removedCRX
+	} else if dir := s.SystemExtensionsDir(); dir != "" {
+		p := opts.system(filepath.Join(dir, id.ExtensionID+".json"))
+		if _, err := os.Stat(p); err == nil {
+			result.SystemExternalPath = p
+		}
+	}
 	return result, nil
+}
+
+func removeIfExists(path string) (bool, error) {
+	switch err := os.Remove(path); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 func manifestPath(s BrowserStrategy, id Identity) (string, error) {
@@ -285,63 +385,4 @@ func buildManifest(s BrowserStrategy, id Identity, hostPath string) ([]byte, err
 		Type:           "stdio",
 		AllowedOrigins: allowed,
 	}, "", "  ")
-}
-
-func resolveNativeHost(path string) (string, error) {
-	if path != "" {
-		return cleanExistingFile(path)
-	}
-	if exe, err := os.Executable(); err == nil {
-		if p, err := cleanExistingFile(filepath.Join(filepath.Dir(exe), "vault-native")); err == nil {
-			return p, nil
-		}
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		if p, err := cleanExistingFile(filepath.Join(cwd, "vault-native")); err == nil {
-			return p, nil
-		}
-	}
-	if p, err := exec.LookPath("vault-native"); err == nil {
-		return cleanExistingFile(p)
-	}
-	return "", errors.New("install: could not find vault-native; pass --native-host /path/to/vault-native")
-}
-
-func resolveExtensionDir(path string) (string, error) {
-	if path == "" {
-		path = filepath.Join("extension", "dist")
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	st, err := os.Stat(abs)
-	if err != nil {
-		return "", fmt.Errorf("install: extension directory %s: %w", abs, err)
-	}
-	if !st.IsDir() {
-		return "", fmt.Errorf("install: extension path is not a directory: %s", abs)
-	}
-	return abs, nil
-}
-
-func cleanExistingFile(path string) (string, error) {
-	if strings.TrimSpace(path) == "" {
-		return "", errors.New("install: empty path")
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	st, err := os.Stat(abs)
-	if err != nil {
-		return "", fmt.Errorf("install: native host %s: %w", abs, err)
-	}
-	if st.IsDir() {
-		return "", fmt.Errorf("install: native host path is a directory: %s", abs)
-	}
-	if st.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("install: native host is not executable: %s", abs)
-	}
-	return abs, nil
 }

@@ -1,6 +1,6 @@
 GO_BIN := vaultd vault vault-native
 
-.PHONY: all build devd dev-ext dev-desktop extension test test-go test-ext cover fuzz lint vet sqlc vectors clean
+.PHONY: all build devd dev-ext dev-desktop extension crx test test-go test-ext cover fuzz lint vet sqlc vectors clean
 
 all: build extension
 
@@ -21,6 +21,15 @@ dev-desktop:
 # e.g. ALBEAR_VERSION=v1.4.2 make extension (see extension/build/target.ts).
 extension:
 	cd extension && pnpm install && pnpm build
+
+# Sign the built extension into a CRX3 package for `vault install`. The key
+# defaults to the committed dev key; a prod build passes its key, e.g.
+#   ALBEAR_VERSION=v1.4.2 ALBEAR_CRX_KEY=/path/prod.pem make crx
+ALBEAR_CRX_KEY ?= extension/keys/dev.pem
+CRX_OUT ?= extension/albear.crx
+
+crx: extension
+	go run ./tools/crxpack -key $(ALBEAR_CRX_KEY) -out $(CRX_OUT) extension/dist
 
 test: test-go test-ext
 
@@ -62,4 +71,4 @@ vectors:
 
 clean:
 	rm -f $(GO_BIN)
-	rm -rf extension/dist
+	rm -rf extension/dist extension/albear.crx
