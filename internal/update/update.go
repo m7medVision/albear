@@ -34,6 +34,18 @@ const (
 	envDisable = "ALBEAR_NO_UPDATE_CHECK"
 )
 
+// InstallSource records which package manager installed this binary, so the
+// update notice can point at it instead of at a manual download. Package
+// builds stamp it, e.g. the Arch PKGBUILD with
+//
+//	-ldflags "-X github.com/m7medVision/albear/internal/update.InstallSource=arch"
+//
+// Empty (every other build) means a manual install.
+var InstallSource = ""
+
+// SourceArch is the InstallSource of the Arch package, which paru updates.
+const SourceArch = "arch"
+
 // Release is the newest published release as reported by GitHub.
 type Release struct {
 	Tag string
@@ -62,6 +74,8 @@ type Checker struct {
 	CachePath string
 	Client    Doer
 	Now       func() time.Time
+	// Source is the InstallSource the notice advises for.
+	Source string
 }
 
 // New builds a Checker for the running binary version with production
@@ -82,6 +96,7 @@ func New(current string) *Checker {
 		CachePath: cachePath,
 		Client:    &http.Client{Timeout: HTTPTimeout},
 		Now:       time.Now,
+		Source:    InstallSource,
 	}
 }
 
@@ -166,16 +181,26 @@ func (h *Handle) Notice(w io.Writer) {
 	if !ok || !version.IsNewer(st.LatestTag, c.Version) {
 		return
 	}
-	url := st.HTMLURL
-	if url == "" {
-		url = "https://github.com/" + c.Repo + "/releases/latest"
-	}
-	fmt.Fprintln(w, noticeLine(c.Version, st.LatestTag, url))
+	hint := c.UpgradeHint(Release{Tag: st.LatestTag, URL: st.HTMLURL})
+	fmt.Fprintln(w, noticeLine(c.Version, st.LatestTag, hint))
 }
 
-func noticeLine(current, latest, url string) string {
+// UpgradeHint says how to get rel: the package manager command for a
+// packaged install, so the user never downloads a second copy next to the
+// one pacman owns, otherwise the release page.
+func (c *Checker) UpgradeHint(rel Release) string {
+	if c.Source == SourceArch {
+		return "update with: paru -Syu"
+	}
+	if rel.URL != "" {
+		return rel.URL
+	}
+	return "https://github.com/" + c.Repo + "/releases/latest"
+}
+
+func noticeLine(current, latest, hint string) string {
 	return fmt.Sprintf("vault: update available %s -> %s — %s (set %s=1 to silence)",
-		current, latest, url, envDisable)
+		current, latest, hint, envDisable)
 }
 
 func (c *Checker) readCache() (cacheState, bool) {

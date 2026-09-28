@@ -1,0 +1,220 @@
+# Maintainer: Mohammed <m7medvision@duck.com>
+#
+# albear is NOT on the AUR: new AUR account registration is closed, so this
+# PKGBUILD is served from albear's own repository as a paru PKGBUILD
+# repository instead (see install-arch.sh at the repo root).
+#
+# This package builds from source. The "-bin" name only fits this private
+# repository; it MUST be renamed to albear-git before any AUR submission.
+#
+# How updates are detected
+# ------------------------
+# The PKGBUILD never changes between releases. Instead:
+#
+#   * The git source tracks the `stable` branch, which only moves when a
+#     release is promoted (`git push origin main:stable`). paru's Devel check
+#     runs `git ls-remote <url> stable` and compares the hash with the one it
+#     recorded at install time, so `paru -Syu` offers an update only after a
+#     promotion, never on an ordinary push to main. (Tracking HEAD/main would
+#     rebuild the same release on every merge: paru rebuilds whenever the
+#     hash moves, whatever pkgver() then says.)
+#   * prepare() checks out the newest stable release tag (vX.Y.Z, never an
+#     -rc) reachable from that branch, and pkgver() reports it, so the
+#     package version is always a real release.
+#   * The signed extension is downloaded from that tag's GitHub release. A
+#     release that is still being built is a draft whose assets are not
+#     public, so the download fails and the build stops before paru records
+#     the new hash; the next `paru -Syu` tries again. The package therefore
+#     only updates once a release is fully published.
+#
+# .SRCINFO is committed because paru reads it to list the repository. It
+# must be regenerated whenever this file changes:
+#
+#   cd packaging/arch && makepkg --printsrcinfo > .SRCINFO
+#
+# Its pkgver stays 0 on purpose: the real version comes from pkgver() at
+# build time, and a static .SRCINFO version must never look newer than an
+# installed release.
+
+pkgname=albear-bin
+pkgver=0
+pkgrel=1
+pkgdesc='Local-only encrypted secrets manager: daemon, CLI, browser extension and desktop app'
+arch=(x86_64 aarch64)
+url='https://github.com/m7medVision/albear'
+license=(MIT)
+provides=(albear)
+conflicts=(albear)
+depends=(glibc)
+# The Electron desktop app is x86_64 only.
+depends_x86_64=(alsa-lib at-spi2-core dbus expat gtk3 hicolor-icon-theme libcups libdrm
+  libnotify libsecret libxkbcommon libxss libxtst mesa nss xdg-utils)
+makedepends=(curl git go nodejs npm pnpm)
+# Stripping breaks nothing in the Go binaries, but it can corrupt Electron's
+# bundled binaries; the Go builds are stripped by the linker (-s -w) instead.
+options=(!strip !debug !lto)
+source=("albear::git+https://github.com/m7medVision/albear.git#branch=stable")
+sha256sums=('SKIP')
+
+# The newest stable release tag reachable from the checked-out branch.
+_release_tag() {
+  git -C "$srcdir/albear" describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*'
+}
+
+pkgver() {
+  local tag
+  tag=$(_release_tag) || return 1
+  # pacman versions cannot contain '-'; release tags never do (rc tags are
+  # excluded above), so dropping the leading v is enough.
+  printf '%s\n' "${tag#v}"
+}
+
+prepare() {
+  cd "$srcdir/albear"
+  local tag
+  tag=$(_release_tag) || {
+    echo "albear: no stable release tag found on the stable branch" >&2
+    return 1
+  }
+  git -c advice.detachedHead=false checkout --quiet "$tag"
+
+  # No checksum is pinned: the PKGBUILD must not change per release. The
+  # CRX3 signature is the integrity check: browsers refuse a .crx whose
+  # signature does not match the pinned extension ID, and build() checks it
+  # against the ID of the extension built from this very source.
+  if [[ -n ${ALBEAR_PKG_SKIP_CRX:-} ]]; then
+    echo "albear: ALBEAR_PKG_SKIP_CRX is set; packaging without the signed extension (CI only)" >&2
+    rm -f "$srcdir/albear.crx"
+  else
+    local crx_url="$url/releases/download/$tag/albear-extension-$tag.crx"
+    curl -fL --retry 3 --proto '=https' -o "$srcdir/albear.crx" "$crx_url" || {
+      echo "albear: could not download the signed extension for $tag:" >&2
+      echo "  $crx_url" >&2
+      echo "The release is probably still being published; try again later." >&2
+      return 1
+    }
+  fi
+
+  # Keep every toolchain cache inside $srcdir, not the builder's home.
+  export GOPATH="$srcdir/gopath"
+  go mod download
+}
+
+build() {
+  cd "$srcdir/albear"
+  local tag="v$pkgver"
+
+  # Arch Go guidelines, minus -linkmode=external: these are CGO_ENABLED=0
+  # builds like the release ones, which the internal linker still makes
+  # position independent. Without the external linker there is no FULL
+  # RELRO, which namcap reports as a warning.
+  export GOPATH="$srcdir/gopath"
+  export CGO_ENABLED=0
+  export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+  local ldflags="-s -w"
+  ldflags+=" -X github.com/m7medVision/albear/internal/version.Version=$tag"
+  # Marks the install as the Arch package: vault's update notice then says
+  # `paru -Syu` instead of linking to a GitHub download.
+  ldflags+=" -X github.com/m7medVision/albear/internal/update.InstallSource=arch"
+  mkdir -p build
+  local bin
+  for bin in vaultd vault vault-native; do
+    go build -ldflags "$ldflags" -o "build/$bin" "./cmd/$bin"
+  done
+
+  # The prod extension, stamped with the release version.
+  (
+    cd extension
+    pnpm install --frozen-lockfile --store-dir "$srcdir/pnpm-store"
+    ALBEAR_ENV=prod ALBEAR_VERSION="$tag" pnpm build
+  )
+
+  if [[ -f $srcdir/albear.crx ]]; then
+    # Verifies the signature and reads the ID and version out of the .crx
+    # itself, so Chrome's external-extension file can never name a
+    # different extension than the package it points at. The unpacked
+    # extension built above must be the same extension and version.
+    go run ./tools/crxpack -inspect "$srcdir/albear.crx" > build/crx-info
+    go run ./tools/crxpack -inspect extension/dist > build/dist-info
+    if [[ $(< build/crx-info) != "$(< build/dist-info)" ]]; then
+      echo "albear: the release .crx ($(< build/crx-info)) does not match the extension built from $tag ($(< build/dist-info))" >&2
+      return 1
+    fi
+    echo "albear: signed extension $(< build/crx-info)"
+  fi
+
+  if [[ $CARCH == x86_64 ]]; then
+    (
+      cd desktop
+      export npm_config_cache="$srcdir/npm-cache"
+      export ELECTRON_CACHE="$srcdir/electron-cache"
+      export ELECTRON_BUILDER_CACHE="$srcdir/electron-builder-cache"
+      (cd release/app && npm version "$pkgver" --no-git-tag-version --allow-same-version)
+      npm ci
+      npm exec ts-node -- ./.erb/scripts/clean.js dist
+      npm run build
+      # An unpacked app: pacman owns the files, and the AppImage-only
+      # self-updater stays off because APPIMAGE is never set.
+      npx electron-builder build --linux dir --x64 --publish never
+    )
+  fi
+}
+
+package() {
+  cd "$srcdir/albear"
+
+  local bin
+  for bin in vaultd vault vault-native; do
+    install -Dm755 "build/$bin" "$pkgdir/usr/bin/$bin"
+  done
+  install -Dm644 deploy/albear-vaultd.service "$pkgdir/usr/lib/systemd/user/albear-vaultd.service"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  # The unpacked extension and the signed .crx, where `vault install` looks.
+  install -dm755 "$pkgdir/usr/share/albear"
+  cp -r --no-preserve=ownership extension/dist "$pkgdir/usr/share/albear/extension"
+  find "$pkgdir/usr/share/albear/extension" -type d -exec chmod 755 {} + -o -type f -exec chmod 644 {} +
+
+  if [[ -f $srcdir/albear.crx ]]; then
+    install -Dm644 "$srcdir/albear.crx" "$pkgdir/usr/share/albear/albear.crx"
+    # Google Chrome on Linux only reads external extensions from this
+    # root-owned folder; it installs the extension on its next start.
+    local id version
+    read -r id version < build/crx-info
+    install -dm755 "$pkgdir/usr/share/google-chrome/extensions"
+    printf '{"external_crx":"/usr/share/albear/albear.crx","external_version":"%s"}\n' "$version" \
+      > "$pkgdir/usr/share/google-chrome/extensions/$id.json"
+    chmod 644 "$pkgdir/usr/share/google-chrome/extensions/$id.json"
+  fi
+
+  if [[ $CARCH == x86_64 ]]; then
+    install -dm755 "$pkgdir/usr/lib/albear-desktop"
+    cp -r --no-preserve=ownership desktop/release/build/linux-unpacked/. "$pkgdir/usr/lib/albear-desktop/"
+
+    # Electron finds its resources through /proc/self/exe, so a symlink is
+    # enough of a launcher.
+    install -dm755 "$pkgdir/usr/bin"
+    ln -s /usr/lib/albear-desktop/albear-desktop "$pkgdir/usr/bin/albear"
+
+    # Named after the app's desktopName so Wayland compositors match the
+    # window to this entry.
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/dev.albear.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Albear
+Comment=Local-only encrypted secrets manager
+Exec=albear %U
+Icon=albear
+Terminal=false
+Categories=Utility;Security;
+StartupWMClass=Albear
+EOF
+
+    local png size
+    for png in desktop/assets/icons/*x*.png; do
+      size=$(basename "$png" .png)
+      install -Dm644 "$png" "$pkgdir/usr/share/icons/hicolor/$size/apps/albear.png"
+    done
+    install -Dm644 desktop/assets/icon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/albear.svg"
+  fi
+}
