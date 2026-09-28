@@ -223,6 +223,12 @@ After restarting the browser:
 2. In a terminal run `./vault clients approve` and confirm the phrase matches
    on both sides.
 
+> **Upgrading from an earlier release?** The prod extension is now signed with
+> a new key, so its ID changed to `legbdpcjojmfelbcjfelmdelnjcnpllc` and the
+> daemon no longer knows it. Pair once more: open the popup → **Pair with
+> vaultd**, then run `vault clients approve`. You can `vault clients revoke`
+> the old entry.
+
 To load the unpacked build instead (e.g. with `make dev-ext`), open
 `chrome://extensions`, enable **Developer mode**, **Load unpacked** →
 `extension/dist`.
@@ -245,6 +251,21 @@ go test ./...
 cd extension && pnpm test
 cd desktop && npm test
 ```
+
+## Releasing (maintainers)
+
+Releases attach the prod extension as `albear-extension-<tag>.zip` and a
+signed `albear-extension-<tag>.crx` (also as `albear-extension.crx`, so
+`releases/latest/download/albear-extension.crx` always works). The release
+job signs with the `ALBEAR_EXTENSION_KEY` Actions secret and fails without it.
+To create the prod key, check it matches the pinned `PROD_PUBLIC_KEY` /
+`ChromeExtensionID`, and set the secret, run:
+
+```sh
+tools/wizards/extension-key.sh   # key defaults to ~/.config/albear-release/extension-prod.pem
+```
+
+`go run ./tools/crxpack -key KEY.pem -print-id` prints any key's extension ID.
 
 ## Invariants
 

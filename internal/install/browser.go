@@ -23,7 +23,7 @@ import (
 const (
 	// ChromeExtensionID is the prod extension, pinned by PROD_PUBLIC_KEY in
 	// extension/build/target.ts.
-	ChromeExtensionID = "iblbbooeonkneacnoakpkkpdpehdhdna"
+	ChromeExtensionID = "legbdpcjojmfelbcjfelmdelnjcnpllc"
 	NativeHostName    = "dev.albear.native"
 
 	// DevExtensionID is the dev extension, pinned by DEV_PUBLIC_KEY in

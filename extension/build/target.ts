@@ -12,11 +12,11 @@
 
 export type Environment = 'dev' | 'prod'
 
-// PROD_PUBLIC_KEY pins the prod extension ID (iblbbooeonkneacnoakpkkpdpehdhdna).
+// PROD_PUBLIC_KEY pins the prod extension ID (legbdpcjojmfelbcjfelmdelnjcnpllc).
 // Base64 DER SubjectPublicKeyInfo; swapping this one constant rotates the prod
 // identity. Keep internal/install.ChromeExtensionID in sync.
 export const PROD_PUBLIC_KEY =
-  'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq0MNoBDQinfrDN3gTrGC5IdxEs0tL+9rIE41zuMxLSNiad5zORZageq0r71SnE9hLHF6rDwRO+AJK0/Z+unaCGruQCyaS5wFiQm/RNTXxnBSxEcd1VjBdXUTjAtAlUtXqGIOkb564i4KRILKbW6FyOIvb92XUs6EXkuyUs6u5JbaixYGCPOhAiu4mW2qFgSPL6cIdVSzmzqoyjGo5YqSEmFkfSpPXeDrH29SVNnPAXFo+ZS1eOzh7IyXzkMIOxLDhZ+XfAylyKNqLuaXoTPgqveudwHFqsH2z67Hl3yHkHzqIaBdvcrMy/uRIDfNWM4MzBcIljc8aKazdh5spwkDIwIDAQAB'
+  'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0rUlbOwcLAW75Zoj9wSrnZM1edjGIIRFcuBzwvpSRD5KjI0I72IJrf4rcnamNOXcJRqILk7gd361HOAPnb6NrlyIWqMSwbm1G9xgDs1ew8HOMJ/8xMwzZxq4jDSVtZgWKn+p7ebWSmcrEcttIBaow2YS+RwnFQjbO7u4DxtZxkyYwAIHeEoveK0ekuH1TApdxdJu8Jz1JMmXIgjHVH+/5p6FaZgEND6UuoDOGhC8XTH2r8ioK9zvvRb8QH98qn8c9VvsoX23RoKxyjs0vkMQFsLeWjxPK6EV6fY9VFGg3vbusyIRa5F9X66InQfCMu89JB8dTfOFoVqbAAxWXnMkVwIDAQAB'
 
 // DEV_PUBLIC_KEY is the public half of the committed extension/keys/dev.pem
 // and pins the dev extension ID (ohcnnpelgjehhoejpajdkmeejklpaden). Keep

@@ -3,8 +3,12 @@
 //	go run ./tools/crxpack -key extension/keys/dev.pem -out extension/albear.crx extension/dist
 //
 // -key defaults to $ALBEAR_CRX_KEY, so CI can pass the prod key without
-// putting its path on the command line. The manifest's pinned "key" must be
-// the signing key's public key: a mismatch would install under a different
+// putting its path on the command line. With -print-id it only prints the
+// extension ID the key signs as, and the base64 public key to pin, e.g.
+//
+//	go run ./tools/crxpack -key prod.pem -print-id
+//
+// The manifest's pinned "key" must be the signing key's public key: a mismatch would install under a different
 // extension ID than the one the native host allows, so it is refused.
 package main
 
@@ -31,13 +35,17 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("crxpack", flag.ContinueOnError)
 	keyPath := fs.String("key", os.Getenv("ALBEAR_CRX_KEY"), "PEM RSA private key (default $ALBEAR_CRX_KEY)")
 	out := fs.String("out", "", "CRX file to write")
+	printID := fs.Bool("print-id", false, "print the key's extension ID and base64 public key, then exit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 1 || *keyPath == "" || *out == "" {
+	if *printID {
+		if fs.NArg() != 0 || *keyPath == "" {
+			return errors.New("usage: crxpack -key KEY.pem -print-id")
+		}
+	} else if fs.NArg() != 1 || *keyPath == "" || *out == "" {
 		return errors.New("usage: crxpack -key KEY.pem -out FILE.crx EXTENSION_DIR")
 	}
-	dir := fs.Arg(0)
 
 	pemData, err := os.ReadFile(*keyPath)
 	if err != nil {
@@ -51,6 +59,11 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if *printID {
+		fmt.Printf("%s\n%s\n", crx.ExtensionID(pub), base64.StdEncoding.EncodeToString(pub))
+		return nil
+	}
+	dir := fs.Arg(0)
 	m, err := crx.ReadManifestFile(dir)
 	if err != nil {
 		return err

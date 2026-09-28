@@ -81,7 +81,7 @@ describe('resolveTarget', () => {
 describe('createManifest', () => {
   it.each([
     ['dev', {}, 'ohcnnpelgjehhoejpajdkmeejklpaden', 'albear (dev)', 'albear (dev)', DEFAULT_VERSION],
-    ['prod', { ALBEAR_VERSION: 'v1.4.2-rc.3' }, 'iblbbooeonkneacnoakpkkpdpehdhdna', 'albear — البير', 'albear', '1.4.2'],
+    ['prod', { ALBEAR_VERSION: 'v1.4.2-rc.3' }, 'legbdpcjojmfelbcjfelmdelnjcnpllc', 'albear — البير', 'albear', '1.4.2'],
   ] as const)('%s', (_env, vars, id, name, title, version) => {
     const m = createManifest(resolveTarget(vars))
     expect(extensionID(m.key!)).toBe(id)

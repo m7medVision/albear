@@ -39,8 +39,8 @@ func TestChromeValidateExtensionID(t *testing.T) {
 	}
 	for _, id := range []string{
 		"short",
-		"iblbbooeonkneacnoakpkkpdpehdhdnq",
-		"IBLBBOOEONKNEACNOAKPKKPDPEHDHDNA",
+		"legbdpcjojmfelbcjfelmdelnjcnpllq",
+		"LEGBDPCJOJMFELBCJFELMDELNJCNPLLC",
 	} {
 		if err := s.ValidateExtensionID(id); err == nil {
 			t.Fatalf("ValidateExtensionID(%q) succeeded", id)

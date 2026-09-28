@@ -139,15 +139,30 @@ jobs:
             dist/*.rpm
 
   extension:
-    name: Extension zip
+    name: Extension zip and signed crx
     needs: [version, goreleaser]
     runs-on: ubuntu-latest
     env:
       TAG: ${{ needs.version.outputs.tag }}
     steps:
+      # Fail before building anything: a release without the .crx breaks
+      # `vault install` and the Arch package, which download it by tag.
+      - name: Require the extension signing key
+        env:
+          ALBEAR_EXTENSION_KEY: ${{ secrets.ALBEAR_EXTENSION_KEY }}
+        run: |
+          if [ -z "$ALBEAR_EXTENSION_KEY" ]; then
+            echo "::error title=Missing secret::ALBEAR_EXTENSION_KEY is not set. Run tools/wizards/extension-key.sh to create the prod extension key and add it."
+            exit 1
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.tag }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
 
       - uses: pnpm/action-setup@v6
         with:
@@ -163,31 +178,44 @@ jobs:
         working-directory: extension
         run: pnpm install --frozen-lockfile
 
-      # Chrome requires plain dotted integers, so the -rc.N/+build suffix is
-      # stripped for the manifest only; the zip filename keeps the full tag.
-      - name: Sync manifest version from tag
-        working-directory: extension
-        run: |
-          ver="${TAG#v}"
-          ver="${ver%%-*}"
-          ver="${ver%%+*}"
-          sed -i "s/^  version: '[0-9][^']*',$/  version: '${ver}',/" manifest.config.ts
-          grep -qF "version: '${ver}'," manifest.config.ts
-
+      # The prod build pins PROD_PUBLIC_KEY and stamps the manifest version
+      # from the tag, minus any -rc.N/+build suffix (Chrome versions are
+      # numbers only); the asset names keep the full tag.
       - name: Build
         working-directory: extension
+        env:
+          ALBEAR_ENV: prod
+          ALBEAR_VERSION: ${{ needs.version.outputs.tag }}
         run: pnpm build
 
       - name: Zip
         run: |
           (cd extension/dist && zip -qr "../../albear-extension-${TAG}.zip" .)
 
+      # crxpack refuses a key whose public half is not the pinned manifest
+      # key, so a wrong secret fails here instead of shipping a foreign ID.
+      - name: Sign crx
+        env:
+          ALBEAR_EXTENSION_KEY: ${{ secrets.ALBEAR_EXTENSION_KEY }}
+        run: |
+          set -euo pipefail
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "$ALBEAR_EXTENSION_KEY" >"$key"
+          go run ./tools/crxpack -key "$key" \
+            -out "albear-extension-${TAG}.crx" extension/dist
+          # Unversioned copy for the stable /releases/latest/download/ URL.
+          cp "albear-extension-${TAG}.crx" albear-extension.crx
+
       - name: Upload to draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber \
-            "albear-extension-${TAG}.zip"
+            "albear-extension-${TAG}.zip" \
+            "albear-extension-${TAG}.crx" \
+            albear-extension.crx
 
   desktop:
     name: Desktop installer (linux)

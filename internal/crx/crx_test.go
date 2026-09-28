@@ -14,11 +14,11 @@ import (
 
 func TestExtensionID(t *testing.T) {
 	// The pinned prod key and the ID Chrome shows for it.
-	der, err := base64.StdEncoding.DecodeString("MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq0MNoBDQinfrDN3gTrGC5IdxEs0tL+9rIE41zuMxLSNiad5zORZageq0r71SnE9hLHF6rDwRO+AJK0/Z+unaCGruQCyaS5wFiQm/RNTXxnBSxEcd1VjBdXUTjAtAlUtXqGIOkb564i4KRILKbW6FyOIvb92XUs6EXkuyUs6u5JbaixYGCPOhAiu4mW2qFgSPL6cIdVSzmzqoyjGo5YqSEmFkfSpPXeDrH29SVNnPAXFo+ZS1eOzh7IyXzkMIOxLDhZ+XfAylyKNqLuaXoTPgqveudwHFqsH2z67Hl3yHkHzqIaBdvcrMy/uRIDfNWM4MzBcIljc8aKazdh5spwkDIwIDAQAB")
+	der, err := base64.StdEncoding.DecodeString("MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0rUlbOwcLAW75Zoj9wSrnZM1edjGIIRFcuBzwvpSRD5KjI0I72IJrf4rcnamNOXcJRqILk7gd361HOAPnb6NrlyIWqMSwbm1G9xgDs1ew8HOMJ/8xMwzZxq4jDSVtZgWKn+p7ebWSmcrEcttIBaow2YS+RwnFQjbO7u4DxtZxkyYwAIHeEoveK0ekuH1TApdxdJu8Jz1JMmXIgjHVH+/5p6FaZgEND6UuoDOGhC8XTH2r8ioK9zvvRb8QH98qn8c9VvsoX23RoKxyjs0vkMQFsLeWjxPK6EV6fY9VFGg3vbusyIRa5F9X66InQfCMu89JB8dTfOFoVqbAAxWXnMkVwIDAQAB")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ExtensionID(der), "iblbbooeonkneacnoakpkkpdpehdhdna"; got != want {
+	if got, want := ExtensionID(der), "legbdpcjojmfelbcjfelmdelnjcnpllc"; got != want {
 		t.Fatalf("ExtensionID = %s, want %s", got, want)
 	}
 }

@@ -9,6 +9,7 @@ coverage.*
 # Release artifacts (goreleaser output; also the extension zip it attaches)
 /dist/
 /albear-extension-*.zip
+/albear-extension*.crx
 
 # Node
 node_modules/
