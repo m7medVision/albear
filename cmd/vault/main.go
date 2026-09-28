@@ -164,7 +164,7 @@ func cmdVersion(args []string) int {
 	case err != nil:
 		fmt.Fprintln(os.Stderr, "vault: update check failed:", err)
 	case version.IsNewer(rel.Tag, version.Version):
-		fmt.Printf("update available: %s -> %s — %s\n", version.Version, rel.Tag, rel.URL)
+		fmt.Printf("update available: %s -> %s — %s\n", version.Version, rel.Tag, chk.UpgradeHint(rel))
 	default:
 		fmt.Println("up to date")
 	}

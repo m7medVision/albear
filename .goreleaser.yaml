@@ -68,28 +68,6 @@ nfpms:
       - src: deploy/albear-vaultd.service
         dst: /usr/lib/systemd/user/albear-vaultd.service
 
-# AUR is written and validated but stays off: there is no AUR account yet, and
-# an enabled block without AUR_KEY fails the release. To turn on: create the
-# aur.archlinux.org/albear-bin.git repo, add the SSH key as the AUR_KEY repo
-# secret, and uncomment.
-#
-# aurs:
-#   - name: albear-bin
-#     ids: [default]
-#     homepage: https://github.com/m7medVision/albear
-#     description: Local-only encrypted secrets manager.
-#     maintainers: ['Mohammed <m7medvision@duck.com>']
-#     license: MIT
-#     private_key: '{{ .Env.AUR_KEY }}'
-#     git_url: 'ssh://aur@aur.archlinux.org/albear-bin.git'
-#     package: |-
-#       install -Dm755 "./vault"        "${pkgdir}/usr/bin/vault"
-#       install -Dm755 "./vaultd"       "${pkgdir}/usr/bin/vaultd"
-#       install -Dm755 "./vault-native" "${pkgdir}/usr/bin/vault-native"
-#       install -Dm644 "./deploy/albear-vaultd.service" \
-#         "${pkgdir}/usr/lib/systemd/user/albear-vaultd.service"
-#       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/albear-bin/LICENSE"
-
 # Git's version sort is prerelease-blind unless versionsort.suffix is set, so a
 # commit carrying both vX.Y.Z and vX.Y.Z-rc.N sorts the rc higher. Promotion
 # (`git push origin main:stable`) always produces exactly that pair. This also
