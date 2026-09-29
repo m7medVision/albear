@@ -29,7 +29,7 @@
   "include": [
     "src",
     "tests",
-    "manifest.config.ts",
+    "build",
     "vite.config.ts"
   ]
 }

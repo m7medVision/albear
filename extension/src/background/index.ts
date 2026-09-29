@@ -21,6 +21,15 @@ import {
   type StoredPairing,
 } from '../messaging/pairing'
 import { NATIVE_HOST, VaultError, VaultTransport, type Port } from '../messaging/transport'
+import { BUILD } from '../build-info'
+import { showEnvironmentBadge } from './badge'
+
+// The badge is not persisted across browser restarts, so set it whenever the
+// worker starts and on the startup/install events that wake it.
+const showBadge = () => showEnvironmentBadge(chrome.action, BUILD.badge)
+showBadge()
+chrome.runtime.onStartup.addListener(showBadge)
+chrome.runtime.onInstalled.addListener(showBadge)
 
 let session: VaultTransport | null = null
 let connecting: Promise<VaultTransport> | null = null

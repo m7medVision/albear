@@ -39,6 +39,19 @@ const (
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	// Resolve the environment before anything else: an invalid ALBEAR_ENV
+	// must stop every command, and a dev build announces itself on each one
+	// (on stderr, so stdout stays scriptable) so a dev vault is never
+	// mistaken for the real one.
+	env, err := version.CurrentEnvironment()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "vault:", err)
+		return exitUsage
+	}
+	if env == version.Dev {
+		fmt.Fprintln(os.Stderr, "[dev] using the dev vault (albear-dev)")
+	}
+
 	if len(args) == 0 {
 		usage()
 		return exitUsage
@@ -96,6 +109,8 @@ func dispatch(cmd string, rest []string) int {
 		return cmdDoctor(rest)
 	case "install":
 		return cmdInstall(rest)
+	case "uninstall":
+		return cmdUninstall(rest)
 	case "destroy":
 		return cmdDestroy(rest)
 	case "help", "--help", "-h":
@@ -108,7 +123,7 @@ func dispatch(cmd string, rest []string) int {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `albear (البير) — local encrypted secrets manager
+	fmt.Fprintf(os.Stderr, `albear (البير) — local encrypted secrets manager
 
 Usage:
   vault init | status | unlock | lock | panic-lock
@@ -120,11 +135,18 @@ Usage:
   vault clients list|approve|revoke
   vault backup create|verify|restore <path>
   vault events [--limit N]
-  vault install <browser> [--native-host PATH] [--extension-dir PATH] [--print-only]
+  vault install [browser] [--crx PATH] [--native-host PATH] [--extension-dir PATH] [--print-only]
+  vault uninstall [browser]
   vault doctor
   vault destroy
   vault version
-`)
+
+Browsers: %s
+  install with no browser sets up each one whose config folder exists;
+  uninstall with no browser acts on all of them. Chromium, Brave and Helium
+  install the signed extension on their next start; Chrome needs one sudo
+  command, which install prints.
+`, strings.Join(install.Names(), ", "))
 }
 
 // ---- version -------------------------------------------------------------
@@ -142,7 +164,7 @@ func cmdVersion(args []string) int {
 	case err != nil:
 		fmt.Fprintln(os.Stderr, "vault: update check failed:", err)
 	case version.IsNewer(rel.Tag, version.Version):
-		fmt.Printf("update available: %s -> %s — %s\n", version.Version, rel.Tag, rel.URL)
+		fmt.Printf("update available: %s -> %s — %s\n", version.Version, rel.Tag, chk.UpgradeHint(rel))
 	default:
 		fmt.Println("up to date")
 	}
@@ -983,48 +1005,172 @@ func cmdDoctor(args []string) int {
 
 // ---- install -----------------------------------------------------------
 
-func cmdInstall(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "vault: install <browser> [--native-host PATH] [--extension-dir PATH] [--print-only]")
-		return exitUsage
+// splitBrowser takes an optional leading browser name off args; "" means
+// no browser was named.
+func splitBrowser(args []string) (string, []string) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return "", args
 	}
-	name := args[0]
-	strategy, err := install.Get(name)
+	return args[0], args[1:]
+}
+
+func browserLabel(name string) string { return strings.ToUpper(name[:1]) + name[1:] }
+
+// installIdentity is the extension and native host this CLI's environment
+// installs: a dev build sets up the dev extension, never the prod one.
+func installIdentity() (install.Identity, error) {
+	env, err := version.CurrentEnvironment()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "vault:", err)
-		return exitUsage
+		return install.Identity{}, err
 	}
-	fs := flag.NewFlagSet("install "+name, flag.ContinueOnError)
+	return install.IdentityFor(env), nil
+}
+
+func cmdInstall(args []string) int {
+	name, rest := splitBrowser(args)
+	var strategy install.BrowserStrategy
+	if name != "" {
+		s, err := install.Get(name)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "vault:", err)
+			return exitUsage
+		}
+		strategy = s
+	}
+	fs := flag.NewFlagSet(strings.TrimSpace("install "+name), flag.ContinueOnError)
+	crxPath := fs.String("crx", "", "path to the signed extension package (.crx)")
 	nativeHost := fs.String("native-host", "", "path to vault-native")
 	extensionDir := fs.String("extension-dir", "", "path to built extension directory")
 	printOnly := fs.Bool("print-only", false, "validate and print install paths without writing")
-	if fs.Parse(args[1:]) != nil {
+	if fs.Parse(rest) != nil {
 		return exitUsage
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "vault: install", name, "does not accept positional arguments")
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "vault: install [browser] [--crx PATH] [--native-host PATH] [--extension-dir PATH] [--print-only]")
+		} else {
+			fmt.Fprintln(os.Stderr, "vault: install", name, "does not accept positional arguments")
+		}
 		return exitUsage
 	}
-	result, err := install.Install(strategy, install.Options{
-		NativeHostPath: *nativeHost,
-		ExtensionDir:   *extensionDir,
-		PrintOnly:      *printOnly,
-	})
+	id, err := installIdentity()
 	if err != nil {
 		return fail(err)
 	}
-	label := strings.ToUpper(name[:1]) + name[1:]
-	if result.WroteManifest {
-		fmt.Println(label, "native host installed:", result.ManifestPath)
-	} else {
-		fmt.Println(label, "native host manifest:", result.ManifestPath)
+	opts := install.Options{
+		NativeHostPath: *nativeHost,
+		ExtensionDir:   *extensionDir,
+		CRXPath:        *crxPath,
+		PrintOnly:      *printOnly,
+		Identity:       id,
 	}
+
+	// A named browser is set up even if its config folder is missing; with
+	// no name, only browsers whose config folder exists are.
+	var results []install.Result
+	var skipped []install.Skipped
+	if strategy != nil {
+		result, err := install.Install(strategy, opts)
+		if err != nil {
+			return fail(err)
+		}
+		results = []install.Result{result}
+	} else {
+		if results, skipped, err = install.InstallDetected(opts); err != nil {
+			return fail(err)
+		}
+	}
+	manual := false
+	for _, result := range results {
+		label := browserLabel(result.Browser)
+		if result.WroteManifest {
+			fmt.Println(label, "native host installed:", result.ManifestPath)
+		} else {
+			fmt.Println(label, "native host manifest:", result.ManifestPath)
+		}
+		switch result.Extension {
+		case install.ExtensionRegistered:
+			if result.WroteExternal {
+				fmt.Printf("%s extension %s registered: %s (restart %s to install it)\n", label, result.ExtensionVersion, result.ExternalPath, label)
+			} else {
+				fmt.Printf("%s extension %s registration: %s\n", label, result.ExtensionVersion, result.ExternalPath)
+			}
+		case install.ExtensionSystemPresent:
+			fmt.Println(label, "extension set up by", result.ExternalPath)
+		case install.ExtensionNeedsSudo:
+			fmt.Println(label, "extension: Chrome only installs it from a root-owned file; run once, then restart Chrome:")
+			fmt.Println("  " + result.SudoCommand)
+		default:
+			manual = true
+			fmt.Println(label, "extension: no signed .crx found (make crx, or pass --crx); load it unpacked")
+		}
+	}
+	for _, s := range skipped {
+		fmt.Println(browserLabel(s.Browser), "skipped: no config folder at", s.ConfigDir)
+	}
+	if len(results) == 0 {
+		fmt.Fprintf(os.Stderr, "vault: no supported browser found; name one: vault install <%s>\n", strings.Join(install.Names(), "|"))
+		return exitNotFound
+	}
+	result := results[0]
+	fmt.Println()
 	fmt.Println("vault-native:", result.NativeHostPath)
 	fmt.Println("extension ID:", result.ExtensionID)
-	fmt.Println("extension dir:", result.ExtensionDir)
-	fmt.Println()
-	fmt.Println("Open the browser's extensions page, enable Developer mode, choose Load unpacked, then select:")
-	fmt.Println(result.ExtensionDir)
+	if result.CRXPath != "" {
+		fmt.Println("extension package:", result.CRXPath)
+	}
+	if result.ExtensionDir != "" {
+		fmt.Println("extension dir:", result.ExtensionDir)
+	}
+	if manual {
+		fmt.Println()
+		if result.ExtensionDir != "" {
+			fmt.Println("Open the browser's extensions page, enable Developer mode, choose Load unpacked, then select:")
+			fmt.Println(result.ExtensionDir)
+		} else {
+			fmt.Println("No unpacked extension found either; build it (make extension) or pass --extension-dir.")
+		}
+	}
+	return exitOK
+}
+
+func cmdUninstall(args []string) int {
+	name, rest := splitBrowser(args)
+	if len(rest) != 0 {
+		fmt.Fprintln(os.Stderr, "vault: uninstall [browser]")
+		return exitUsage
+	}
+	strategies := install.All()
+	if name != "" {
+		s, err := install.Get(name)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "vault:", err)
+			return exitUsage
+		}
+		strategies = []install.BrowserStrategy{s}
+	}
+	id, err := installIdentity()
+	if err != nil {
+		return fail(err)
+	}
+	for _, s := range strategies {
+		result, err := install.Uninstall(s, install.Options{Identity: id})
+		if err != nil {
+			return fail(err)
+		}
+		label := browserLabel(result.Browser)
+		if result.RemovedManifest {
+			fmt.Println(label, "native host removed:", result.ManifestPath)
+		} else {
+			fmt.Println(label, "native host not installed")
+		}
+		if result.RemovedExternal {
+			fmt.Printf("%s extension unregistered (restart %s to remove it)\n", label, label)
+		}
+		if result.SystemExternalPath != "" {
+			fmt.Printf("%s extension is still set up by the root-owned %s (removed with the albear package; otherwise: sudo rm %s)\n", label, result.SystemExternalPath, result.SystemExternalPath)
+		}
+	}
 	return exitOK
 }
 

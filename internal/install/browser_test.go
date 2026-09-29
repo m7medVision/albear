@@ -39,8 +39,8 @@ func TestChromeValidateExtensionID(t *testing.T) {
 	}
 	for _, id := range []string{
 		"short",
-		"iblbbooeonkneacnoakpkkpdpehdhdnq",
-		"IBLBBOOEONKNEACNOAKPKKPDPEHDHDNA",
+		"legbdpcjojmfelbcjfelmdelnjcnpllq",
+		"LEGBDPCJOJMFELBCJFELMDELNJCNPLLC",
 	} {
 		if err := s.ValidateExtensionID(id); err == nil {
 			t.Fatalf("ValidateExtensionID(%q) succeeded", id)
@@ -71,7 +71,7 @@ func TestResolveNativeHostRequiresExecutableFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not executable"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveNativeHost(path); err == nil {
+	if _, err := resolveNativeHost(Options{NativeHostPath: path}); err == nil {
 		t.Fatal("resolveNativeHost succeeded for non-executable file")
 	}
 }
@@ -101,7 +101,7 @@ func TestInstallWritesManifest(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 
-	res, err := Install(Chrome{}, Options{NativeHostPath: hostPath, ExtensionDir: extDir})
+	res, err := Install(Chrome{}, Options{NativeHostPath: hostPath, ExtensionDir: extDir, SystemRoot: dir})
 	if err != nil {
 		t.Fatal(err)
 	}

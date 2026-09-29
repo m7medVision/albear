@@ -4,6 +4,6 @@
   "path": "/usr/local/bin/vault-native",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://iblbbooeonkneacnoakpkkpdpehdhdna/"
+    "chrome-extension://legbdpcjojmfelbcjfelmdelnjcnpllc/"
   ]
 }

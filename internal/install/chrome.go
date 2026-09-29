@@ -1,51 +1,30 @@
 package install
 
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
-)
+// chrome describes Google Chrome within the Chromium family. Chrome on
+// Linux has no per-user External Extensions folder, only the root-owned
+// system one (which the Arch package fills).
+var chrome = chromiumFamily{
+	name:                "chrome",
+	configDir:           "google-chrome",
+	systemExtensionsDir: "/usr/share/google-chrome/extensions",
+}
 
-// Chrome is the BrowserStrategy for Google Chrome (and Chromium-family
-// browsers sharing the same NativeMessagingHosts directory layout).
-// Linux-only today; the OS gate lives here, not in the generic Install.
+// Chrome is the BrowserStrategy for Google Chrome. It stays a named type
+// (rather than a bare chromiumFamily value like the other browsers) so
+// callers constructing Chrome{} keep working; every method delegates to
+// the shared Chromium-family base.
 type Chrome struct{}
 
-func (Chrome) Name() string        { return "chrome" }
-func (Chrome) ExtensionID() string { return ChromeExtensionID }
-
-func (Chrome) ManifestPath() (string, error) {
-	if runtime.GOOS != "linux" {
-		return "", fmt.Errorf("chrome install: only Linux current-user installs are supported")
-	}
-	config := os.Getenv("XDG_CONFIG_HOME")
-	if config == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		config = filepath.Join(home, ".config")
-	}
-	return filepath.Join(config, "google-chrome", "NativeMessagingHosts", NativeHostName+".json"), nil
-}
-
-func (Chrome) AllowedOriginsKey() string { return "allowed_origins" }
+func (Chrome) Name() string                        { return chrome.Name() }
+func (Chrome) ConfigDir() (string, error)          { return chrome.ConfigDir() }
+func (Chrome) NativeHostsDir() (string, error)     { return chrome.NativeHostsDir() }
+func (Chrome) ManifestPath() (string, error)       { return chrome.ManifestPath() }
+func (Chrome) SupportsExternalExtensions() bool    { return chrome.SupportsExternalExtensions() }
+func (Chrome) SystemExtensionsDir() string         { return chrome.SystemExtensionsDir() }
+func (Chrome) ValidateExtensionID(id string) error { return chrome.ValidateExtensionID(id) }
 
 func (Chrome) BuildAllowedOrigins(extensionID string) ([]string, error) {
-	return []string{"chrome-extension://" + extensionID + "/"}, nil
-}
-
-func (Chrome) ValidateExtensionID(id string) error {
-	if len(id) != 32 {
-		return fmt.Errorf("chrome install: extension ID must be 32 characters")
-	}
-	for _, r := range id {
-		if r < 'a' || r > 'p' {
-			return fmt.Errorf("chrome install: extension ID contains invalid character %q", r)
-		}
-	}
-	return nil
+	return chrome.BuildAllowedOrigins(extensionID)
 }
 
 func init() { Register(Chrome{}) }

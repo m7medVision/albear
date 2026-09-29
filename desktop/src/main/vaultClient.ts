@@ -7,8 +7,6 @@
 // it talks to this through ipcMain.handle (see ipc.ts).
 
 import net from 'net';
-import os from 'os';
-import path from 'path';
 import { CipherState, XXHandshake, generateKeyPair } from './noise';
 import { FrameDecoder, encodeFrame } from './frames';
 import {
@@ -35,20 +33,6 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const te = new TextEncoder();
 const td = new TextDecoder();
 const EMPTY = new Uint8Array(0);
-
-/**
- * Socket path resolution, mirroring
- * internal/infrastructure/system/paths.go ResolvePaths():
- * $XDG_RUNTIME_DIR/albear/vault.sock, falling back to
- * $XDG_DATA_HOME(~/.local/share)/albear/run/albear/vault.sock.
- */
-export function defaultSocketPath(): string {
-  const home = os.homedir();
-  const data = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
-  const runtime =
-    process.env.XDG_RUNTIME_DIR || path.join(data, 'albear', 'run');
-  return path.join(runtime, 'albear', 'vault.sock');
-}
 
 interface FrameWaiter {
   resolve: (frame: Uint8Array) => void;
@@ -80,7 +64,9 @@ export class VaultClient {
 
   private readonly socketPath: string;
 
-  constructor(socketPath: string = defaultSocketPath()) {
+  // The path is environment-specific (see environment.ts defaultSocketPath),
+  // so the caller must choose it; there is no safe default.
+  constructor(socketPath: string) {
     this.socketPath = socketPath;
   }
 

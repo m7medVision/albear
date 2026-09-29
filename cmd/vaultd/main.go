@@ -92,7 +92,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	log.Info("vaultd listening", "socket", paths.Socket(), "schema", "v1")
+	log.Info("vaultd listening", "env", paths.Env, "socket", paths.Socket(), "schema", "v1")
 
 	err = server.Serve(ctx, ln)
 	// Always leave locked memory behind on the way out.

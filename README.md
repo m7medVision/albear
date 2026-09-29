@@ -46,6 +46,37 @@ Linux only. The core tools support amd64 and arm64; the desktop packages and
 AppImage currently support amd64. `vaultd` authorizes clients by checking the
 socket peer's credentials, so there is no macOS or Windows build.
 
+### Arch Linux
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/m7medVision/albear/main/install-arch.sh | sh
+```
+
+> **albear is not on the AUR.** New AUR account registration is closed, so the
+> package installs from albear's own PKGBUILD repository
+> ([`packaging/arch`](packaging/arch/PKGBUILD)) instead. Read the script and the
+> PKGBUILD before running them if you like; they are all that runs.
+
+One command installs the `albear-bin` package: the daemon, CLI, native relay,
+systemd user unit, browser extension and, on x86_64, the desktop app. It is
+built on your machine from the latest stable release tag. The script then
+enables the `albear-vaultd` user service and runs `vault install` for every
+supported browser it finds. Chromium, Brave and Helium install the extension on
+their next start, and so does Google Chrome, through a system file the package
+installs. Next, run `vault init` or open **Albear**.
+
+With [paru](https://github.com/Morganamilo/paru), the script adds an `[albear]`
+PKGBUILD repository and turns on `Devel` in your user paru config (creating it
+with `Include = /etc/paru.conf` if you had none, and leaving your other
+settings alone). After that, `paru -Syu` updates albear with the rest of your
+system: paru watches the `stable` branch, which only moves when a release is
+promoted, and only installs a release once it is fully published. `vault` tells
+you to run `paru -Syu` when an update is out. Re-running the script is harmless.
+
+Without paru, the script clones the repository and runs `makepkg -si` once.
+Updates are then manual: re-run the script, or install paru and re-run it once
+to switch to `paru -Syu` updates.
+
 ### Core tools
 
 ```sh
@@ -132,7 +163,7 @@ cd desktop && npm install && npm run build
 ## Run
 
 ```sh
-./vaultd &                              # serves $XDG_RUNTIME_DIR/albear/vault.sock
+./vaultd &                              # local build: $XDG_RUNTIME_DIR/albear-dev/vault.sock
 ./vault init                            # create the vault (no recovery without backup!)
 ./vault unlock
 ./vault add login --name GitHub --username you --url https://github.com --generate
@@ -173,22 +204,65 @@ make dev-ext          # cd extension && pnpm dev     (Vite, rebuilds on save)
 make dev-desktop      # cd desktop && npm start      (Electron + hot reload)
 ```
 
-## Install the extension in Chrome (dev)
+### Dev and prod environments
+
+Anything built locally runs in the **dev** environment; release builds (and
+`go install …@vX.Y.Z`) run in **prod**. Dev keeps its vault, config and socket
+under `albear-dev` instead of `albear` (e.g. `~/.local/share/albear-dev`), so a
+dev daemon runs next to the prod service and never touches your real vault.
+Every dev CLI command prints a `[dev]` line on stderr, and the unpackaged
+desktop app shows a DEV badge.
+
+Set `ALBEAR_ENV=dev` or `ALBEAR_ENV=prod` to override (e.g. to point a release
+build at the dev vault). Any other value is an error.
+
+## Install the extension in a Chromium-family browser (dev)
+
+Supported browsers: `chrome`, `chromium`, `brave`, `helium`.
+
+The extension build is per environment, like the binaries. A plain build is
+**dev**: named "albear (dev)", extension ID `ohcnnpelgjehhoejpajdkmeejklpaden`,
+native host `dev.albear.native_dev`, and a DEV badge on its icon, so it runs
+next to the prod extension in one browser profile. `ALBEAR_VERSION=v1.4.2`
+makes a prod build (manifest version `1.4.2`; prerelease suffixes are
+dropped), and `ALBEAR_ENV=dev|prod` overrides the environment. The dev signing
+key is committed at `extension/keys/dev.pem` on purpose: it only protects dev.
 
 ```sh
 make build
+make crx                            # builds extension/dist and signs extension/albear.crx with the dev key
 make devd &                         # daemon must be running to pair
-./vault install chrome --print-only # prints the native-host + extension paths
-./vault install chrome              # writes the native-messaging manifest
+./vault install helium --print-only # prints the paths without writing
+./vault install helium              # native-messaging manifest + External Extensions entry
+./vault install                     # or: every supported browser found in ~/.config
+./vault uninstall [browser]         # removes both again (default: all)
 ```
 
-Then in Chrome:
+A dev `vault` installs the dev extension and native host; a release `vault`
+installs the prod ones. Chromium, Brave and Helium install the signed `.crx`
+from their per-user `External Extensions` folder on their next start, with no
+clicks. Google Chrome on Linux only reads a root-owned folder, so
+`vault install chrome` prints the one `sudo` command that registers it.
+Without flags, install looks for the `.crx`, unpacked extension and
+`vault-native` in the package locations (`/usr/share/albear/albear.crx`,
+`/usr/share/albear/extension`, `/usr/bin/vault-native`), then in the repo
+build outputs; `--crx`, `--extension-dir` and `--native-host` override them.
 
-1. Open `chrome://extensions`, enable **Developer mode**.
-2. **Load unpacked** → select the `extension/dist` path printed above.
-3. Open the popup → **Pair with vaultd**.
-4. In a terminal run `./vault clients approve` and confirm the phrase matches
+After restarting the browser:
+
+1. Open the popup → **Pair with vaultd**.
+2. In a terminal run `./vault clients approve` and confirm the phrase matches
    on both sides.
+
+> **Upgrading from an earlier release?** The prod extension is now signed with
+> a new key, so its ID changed to `legbdpcjojmfelbcjfelmdelnjcnpllc` and the
+> daemon no longer knows it. Pair once more: open the popup → **Pair with
+> vaultd**, then run `vault clients approve`. You can `vault clients revoke`
+> the old entry.
+
+To load the unpacked build instead (e.g. with `make dev-ext`), open
+`chrome://extensions`, enable **Developer mode**, **Load unpacked** →
+`extension/dist`.
 
 ## Run the desktop app
 
@@ -208,6 +282,21 @@ go test ./...
 cd extension && pnpm test
 cd desktop && npm test
 ```
+
+## Releasing (maintainers)
+
+Releases attach the prod extension as `albear-extension-<tag>.zip` and a
+signed `albear-extension-<tag>.crx` (also as `albear-extension.crx`, so
+`releases/latest/download/albear-extension.crx` always works). The release
+job signs with the `ALBEAR_EXTENSION_KEY` Actions secret and fails without it.
+To create the prod key, check it matches the pinned `PROD_PUBLIC_KEY` /
+`ChromeExtensionID`, and set the secret, run:
+
+```sh
+tools/wizards/extension-key.sh   # key defaults to ~/.config/albear-release/extension-prod.pem
+```
+
+`go run ./tools/crxpack -key KEY.pem -print-id` prints any key's extension ID.
 
 ## Invariants
 

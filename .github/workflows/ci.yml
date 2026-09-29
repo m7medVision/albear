@@ -26,6 +26,7 @@ jobs:
       extension: ${{ steps.filter.outputs.extension }}
       desktop: ${{ steps.filter.outputs.desktop }}
       generated: ${{ steps.filter.outputs.generated }}
+      arch: ${{ steps.filter.outputs.arch }}
     steps:
       - uses: actions/checkout@v7
       - id: filter
@@ -38,6 +39,10 @@ jobs:
               - 'cmd/**'
               - 'internal/**'
               - 'tools/noisevectors/**'
+              - 'tools/crxpack/**'
+              # Go tests check the extension IDs against these keys.
+              - 'extension/keys/**'
+              - 'extension/build/target.ts'
               - 'go.mod'
               - 'go.sum'
               - 'sqlc.yaml'
@@ -59,6 +64,11 @@ jobs:
               - 'extension/src/noise/testdata/vectors.json'
               - 'desktop/src/main/testdata/vectors.json'
               - 'Makefile'
+              - '.github/workflows/ci.yml'
+            # Slow (builds the whole package), so only the packaging itself.
+            arch:
+              - 'packaging/**'
+              - 'install-arch.sh'
               - '.github/workflows/ci.yml'
 
   go:
@@ -185,6 +195,69 @@ jobs:
             extension/src/noise/testdata/vectors.json \
             desktop/src/main/testdata/vectors.json
 
+  # The Arch package and its installer, in a real Arch container. makepkg
+  # builds the latest stable release tag from GitHub, exactly as a user's
+  # paru would, so this validates the PKGBUILD against released source, not
+  # against this change's Go or extension code.
+  arch:
+    name: Arch package (shellcheck, namcap, makepkg)
+    needs: detect
+    if: needs.detect.outputs.arch == 'true'
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git shellcheck namcap go nodejs npm pnpm curl
+
+      - uses: actions/checkout@v7
+
+      # makepkg refuses to run as root, and install-arch.sh refuses root too.
+      # sudo lets makepkg --syncdeps install the package's dependencies.
+      - name: Create build user
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/builder
+          cp -r packaging/arch /home/builder/arch
+          chown -R builder:builder /home/builder/arch
+
+      - name: shellcheck
+        run: shellcheck install-arch.sh packaging/arch/test-install-arch.sh
+
+      - name: install-arch.sh edits the paru config idempotently
+        run: runuser -u builder -- sh packaging/arch/test-install-arch.sh
+
+      - name: namcap PKGBUILD
+        run: namcap packaging/arch/PKGBUILD
+
+      - name: .SRCINFO matches the PKGBUILD
+        working-directory: /home/builder/arch
+        run: runuser -u builder -- makepkg --printsrcinfo | diff -u .SRCINFO -
+
+      # The PKGBUILD downloads the signed extension from the release it
+      # builds. Releases made before the .crx was attached to them have none,
+      # so while the latest release lacks it, build without it
+      # (ALBEAR_PKG_SKIP_CRX); once releases carry it, CI builds the real
+      # thing automatically.
+      - name: Does the latest release have the signed extension?
+        run: |
+          latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+            https://github.com/m7medVision/albear/releases/latest)
+          tag=${latest##*/}
+          if curl -fsSLI -o /dev/null \
+            "https://github.com/m7medVision/albear/releases/download/$tag/albear-extension-$tag.crx"; then
+            echo "$tag has the signed extension"
+          else
+            echo "::warning::$tag has no albear-extension-$tag.crx; building without it"
+            echo "ALBEAR_PKG_SKIP_CRX=1" >>"$GITHUB_ENV"
+          fi
+
+      - name: makepkg
+        working-directory: /home/builder/arch
+        run: |
+          runuser -u builder -- env ALBEAR_PKG_SKIP_CRX="${ALBEAR_PKG_SKIP_CRX:-}" \
+            makepkg --syncdeps --noconfirm --cleanbuild
+          namcap ./*.pkg.tar.zst
+
   pr-title:
     name: PR title (conventional commits)
     if: github.event_name == 'pull_request'
@@ -214,19 +287,20 @@ jobs:
   # detect failure too: if detection broke, nothing was really validated.
   ci-ok:
     name: CI (required)
-    needs: [detect, go, extension, desktop, generated, pr-title]
+    needs: [detect, go, extension, desktop, generated, arch, pr-title]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate results
         run: |
-          echo "detect=${{needs.detect.result}} go=${{needs.go.result}} extension=${{needs.extension.result}} desktop=${{needs.desktop.result}} generated=${{needs.generated.result}} pr-title=${{needs.pr-title.result}}"
+          echo "detect=${{needs.detect.result}} go=${{needs.go.result}} extension=${{needs.extension.result}} desktop=${{needs.desktop.result}} generated=${{needs.generated.result}} arch=${{needs.arch.result}} pr-title=${{needs.pr-title.result}}"
           for r in \
             "${{needs.detect.result}}" \
             "${{needs.go.result}}" \
             "${{needs.extension.result}}" \
             "${{needs.desktop.result}}" \
             "${{needs.generated.result}}" \
+            "${{needs.arch.result}}" \
             "${{needs.pr-title.result}}"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               echo "CI gate failing on result: $r" >&2

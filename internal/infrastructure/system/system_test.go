@@ -4,41 +4,131 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/m7medVision/albear/internal/version"
 )
 
+// setVersion stamps version.Version for one test, as release ldflags would.
+func setVersion(t *testing.T, v string) {
+	t.Helper()
+	old := version.Version
+	version.Version = v
+	t.Cleanup(func() { version.Version = old })
+}
+
 func TestResolvePathsXDG(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", "/tmp/x/data")
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/x/config")
-	t.Setenv("XDG_RUNTIME_DIR", "/tmp/x/run")
-	p, err := ResolvePaths()
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name     string
+		version  string
+		env      string
+		wantEnv  version.Environment
+		database string
+		socket   string
+		key      string
+	}{
+		{
+			name: "release build is prod", version: "v1.2.3", wantEnv: version.Prod,
+			database: "/tmp/x/data/albear/vault.db",
+			socket:   "/tmp/x/run/albear/vault.sock",
+			key:      "/tmp/x/config/albear/daemon.key",
+		},
+		{
+			name: "local build is dev", version: "dev", wantEnv: version.Dev,
+			database: "/tmp/x/data/albear-dev/vault.db",
+			socket:   "/tmp/x/run/albear-dev/vault.sock",
+			key:      "/tmp/x/config/albear-dev/daemon.key",
+		},
+		{
+			name: "override release to dev", version: "v1.2.3", env: "dev", wantEnv: version.Dev,
+			database: "/tmp/x/data/albear-dev/vault.db",
+			socket:   "/tmp/x/run/albear-dev/vault.sock",
+			key:      "/tmp/x/config/albear-dev/daemon.key",
+		},
+		{
+			name: "override local build to prod", version: "dev", env: "prod", wantEnv: version.Prod,
+			database: "/tmp/x/data/albear/vault.db",
+			socket:   "/tmp/x/run/albear/vault.sock",
+			key:      "/tmp/x/config/albear/daemon.key",
+		},
 	}
-	if p.Database() != "/tmp/x/data/albear/vault.db" {
-		t.Fatal(p.Database())
-	}
-	if p.Socket() != "/tmp/x/run/albear/vault.sock" {
-		t.Fatal(p.Socket())
-	}
-	if p.StaticKey() != "/tmp/x/config/albear/daemon.key" {
-		t.Fatal(p.StaticKey())
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			setVersion(t, c.version)
+			t.Setenv(version.EnvVar, c.env)
+			t.Setenv("XDG_DATA_HOME", "/tmp/x/data")
+			t.Setenv("XDG_CONFIG_HOME", "/tmp/x/config")
+			t.Setenv("XDG_RUNTIME_DIR", "/tmp/x/run")
+			p, err := ResolvePaths()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Env != c.wantEnv {
+				t.Errorf("Env = %q, want %q", p.Env, c.wantEnv)
+			}
+			if p.Database() != c.database {
+				t.Errorf("Database() = %q, want %q", p.Database(), c.database)
+			}
+			if p.Socket() != c.socket {
+				t.Errorf("Socket() = %q, want %q", p.Socket(), c.socket)
+			}
+			if p.StaticKey() != c.key {
+				t.Errorf("StaticKey() = %q, want %q", p.StaticKey(), c.key)
+			}
+		})
 	}
 }
 
 func TestResolvePathsFallback(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("XDG_RUNTIME_DIR", "")
-	home, _ := os.UserHomeDir()
-	p, err := ResolvePaths()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.DataDir != filepath.Join(home, ".local", "share", "albear") {
-		t.Fatal(p.DataDir)
+	share := filepath.Join(home, ".local", "share")
+	cases := []struct {
+		version, env, name string
+	}{
+		{version: "v1.2.3", name: "albear"},
+		{version: "dev", name: "albear-dev"},
+		{version: "v1.2.3", env: "dev", name: "albear-dev"},
+		{version: "dev", env: "prod", name: "albear"},
 	}
-	if p.ConfigDir != filepath.Join(home, ".config", "albear") {
-		t.Fatal(p.ConfigDir)
+	for _, c := range cases {
+		t.Run(c.version+"/"+c.env, func(t *testing.T) {
+			setVersion(t, c.version)
+			t.Setenv(version.EnvVar, c.env)
+			t.Setenv("XDG_DATA_HOME", "")
+			t.Setenv("XDG_CONFIG_HOME", "")
+			t.Setenv("XDG_RUNTIME_DIR", "")
+			p, err := ResolvePaths()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := filepath.Join(share, c.name); p.DataDir != want {
+				t.Errorf("DataDir = %q, want %q", p.DataDir, want)
+			}
+			if want := filepath.Join(home, ".config", c.name); p.ConfigDir != want {
+				t.Errorf("ConfigDir = %q, want %q", p.ConfigDir, want)
+			}
+			// Without XDG_RUNTIME_DIR the socket lives under the environment's
+			// own data folder, so dev and prod still never share one.
+			if want := filepath.Join(share, c.name, "run", c.name, "vault.sock"); p.Socket() != want {
+				t.Errorf("Socket() = %q, want %q", p.Socket(), want)
+			}
+		})
+	}
+}
+
+// TestResolvePathsInvalidEnv: a typo in ALBEAR_ENV must fail loudly rather
+// than fall back to a guess that could open the other environment's vault.
+func TestResolvePathsInvalidEnv(t *testing.T) {
+	for _, v := range []string{"v1.2.3", "dev"} {
+		for _, env := range []string{"production", "DEV", "staging", " dev"} {
+			setVersion(t, v)
+			t.Setenv(version.EnvVar, env)
+			if p, err := ResolvePaths(); err == nil {
+				t.Errorf("version %q, %s=%q: resolved %+v, want error", v, version.EnvVar, env, p)
+			}
+		}
 	}
 }
 

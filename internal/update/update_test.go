@@ -202,3 +202,60 @@ func TestReadCacheRejectsGarbage(t *testing.T) {
 		t.Fatal("zero checkedAt accepted")
 	}
 }
+
+func TestNoticeByInstallSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		htmlURL string
+		want    string
+	}{
+		{
+			name:    "manual install links the release",
+			htmlURL: "https://github.com/owner/repo/releases/tag/v0.2.0",
+			want:    "https://github.com/owner/repo/releases/tag/v0.2.0",
+		},
+		{
+			name: "manual install without a cached URL links latest",
+			want: "https://github.com/owner/repo/releases/latest",
+		},
+		{
+			name:    "arch package points at paru",
+			source:  SourceArch,
+			htmlURL: "https://github.com/owner/repo/releases/tag/v0.2.0",
+			want:    "update with: paru -Syu",
+		},
+		{
+			name:   "unknown source falls back to the release",
+			source: "brew",
+			want:   "https://github.com/owner/repo/releases/latest",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := newTestChecker(t, "v0.1.0")
+			c.Source = tt.source
+			c.writeCache(cacheState{CheckedAt: c.Now(), LatestTag: "v0.2.0", HTMLURL: tt.htmlURL})
+			var out strings.Builder
+			c.Background().Notice(&out)
+			want := "vault: update available v0.1.0 -> v0.2.0 — " + tt.want +
+				" (set ALBEAR_NO_UPDATE_CHECK=1 to silence)\n"
+			if out.String() != want {
+				t.Fatalf("notice\n got %q\nwant %q", out.String(), want)
+			}
+			if got := c.UpgradeHint(Release{Tag: "v0.2.0", URL: tt.htmlURL}); got != tt.want {
+				t.Fatalf("UpgradeHint = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewTakesInstallSource(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	old := InstallSource
+	t.Cleanup(func() { InstallSource = old })
+	InstallSource = SourceArch
+	if c := New("v0.1.0"); c.Source != SourceArch {
+		t.Fatalf("Source = %q, want %q", c.Source, SourceArch)
+	}
+}

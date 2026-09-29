@@ -5,6 +5,7 @@ import {
   DaemonServiceController,
   DaemonServiceError,
   daemonServiceCommand,
+  devDaemonService,
   type ProcessRunner,
 } from '../main/daemonService';
 
@@ -98,5 +99,17 @@ describe('DaemonServiceController', () => {
         'could not start the Albear background service',
       ),
     );
+  });
+});
+
+describe('devDaemonService', () => {
+  // The systemd unit runs the prod daemon, so dev never offers to enable it.
+  it('never offers the prod background service', async () => {
+    await expect(devDaemonService.status()).resolves.toEqual({
+      state: 'unsupported',
+    });
+    await expect(devDaemonService.setup()).rejects.toMatchObject({
+      code: 'SERVICE_UNSUPPORTED',
+    });
   });
 });
