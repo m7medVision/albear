@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Card,
   CardHeader,
@@ -21,13 +22,19 @@ import {
 import { DAEMON_UNAVAILABLE } from '../../shared/vaultTypes';
 
 export function UnlockCard(): React.ReactElement {
-  const { refresh } = useVault();
+  const { refresh, notice } = useVault();
   const [password, setPassword] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState<string | undefined>();
+  const inputRef = React.useRef<HTMLInputElement>(null);
 
   async function unlock(): Promise<void> {
-    if (!password || busy) return;
+    if (busy) return;
+    if (!password) {
+      setErr('Enter your master password to unlock the vault.');
+      inputRef.current?.focus();
+      return;
+    }
     setErr(undefined);
     setBusy(true);
     try {
@@ -35,12 +42,19 @@ export function UnlockCard(): React.ReactElement {
       setPassword('');
       await refresh();
     } catch (e) {
-      if (isCode(e, RATE_LIMITED)) setErr('too many attempts — wait a moment');
-      else if (isCode(e, AUTH_FAILED)) setErr('wrong password');
-      else if (isCode(e, DAEMON_UNAVAILABLE)) {
-        setErr('lost connection to vaultd');
+      if (isCode(e, RATE_LIMITED)) {
+        setErr('Too many attempts. Wait a moment, then try again.');
+      } else if (isCode(e, AUTH_FAILED)) {
+        setErr(
+          'That master password is incorrect. Check Caps Lock and try again.',
+        );
+      } else if (isCode(e, DAEMON_UNAVAILABLE)) {
+        setErr('Lost connection to the Albear service. Reconnecting…');
         void refresh();
-      } else setErr(messageOf(e, 'unlock failed'));
+      } else {
+        setErr(`${messageOf(e, 'Unable to unlock.')} Try again.`);
+      }
+      inputRef.current?.focus();
     } finally {
       setBusy(false);
     }
@@ -49,30 +63,53 @@ export function UnlockCard(): React.ReactElement {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Unlock</CardTitle>
-        <CardDescription>Enter your master password.</CardDescription>
+        <CardTitle>Unlock your vault</CardTitle>
+        <CardDescription>
+          Your vault is locked. Enter your master password to open it.
+        </CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        <Input
-          type="password"
-          placeholder="Master password"
-          autoFocus
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void unlock();
-          }}
-        />
-        <Button onClick={() => void unlock()} disabled={busy}>
-          {busy && <Loader2 className="animate-spin" />}
-          Unlock
-        </Button>
-        {err && (
-          <Alert variant="destructive">
-            <AlertTitle>Cannot unlock</AlertTitle>
-            <AlertDescription>{err}</AlertDescription>
+      <CardContent className="flex flex-col gap-3">
+        {notice && (
+          <Alert variant={notice.tone ?? 'default'}>
+            <AlertTitle>{notice.title}</AlertTitle>
+            <AlertDescription>{notice.detail}</AlertDescription>
           </Alert>
         )}
+        {/* A real form: Enter submits natively and password managers see a
+            proper login field. */}
+        <form
+          noValidate
+          className="flex flex-col gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void unlock();
+          }}
+        >
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="unlock-password">Master password</Label>
+            <Input
+              ref={inputRef}
+              id="unlock-password"
+              type="password"
+              autoComplete="current-password"
+              autoFocus
+              value={password}
+              aria-invalid={err ? true : undefined}
+              aria-describedby={err ? 'unlock-error' : undefined}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <Button type="submit" disabled={busy}>
+            {busy && <Loader2 className="animate-spin" />}
+            Unlock
+          </Button>
+          {err && (
+            <Alert id="unlock-error" variant="destructive">
+              <AlertTitle>Cannot unlock</AlertTitle>
+              <AlertDescription>{err}</AlertDescription>
+            </Alert>
+          )}
+        </form>
       </CardContent>
     </Card>
   );

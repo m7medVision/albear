@@ -17,10 +17,24 @@ export type Phase =
   | 'locked'
   | 'unlocked';
 
+/**
+ * A message that has to outlive the screen that produced it. Restoring a
+ * backup locks the vault, which unmounts the Backup section before its result
+ * can be read; the unlock screen shows this instead.
+ */
+export interface Notice {
+  title: string;
+  detail: string;
+  tone?: 'default' | 'destructive';
+}
+
 interface VaultState {
   phase: Phase;
   recordCount?: number;
-  refresh: () => Promise<void>;
+  /** Re-checks status; resolves to the phase it settled on. */
+  refresh: () => Promise<Phase>;
+  notice?: Notice;
+  setNotice: (notice: Notice | undefined) => void;
   setupDaemonService: () => Promise<void>;
   /**
    * Re-check status if this error means the vault locked under us. Returns
@@ -45,43 +59,48 @@ export function VaultProvider({
 }): React.ReactElement {
   const [phase, setPhase] = React.useState<Phase>('connecting');
   const [recordCount, setRecordCount] = React.useState<number | undefined>();
+  const [notice, setNotice] = React.useState<Notice | undefined>();
 
-  const refresh = React.useCallback(async (): Promise<void> => {
+  const refresh = React.useCallback(async (): Promise<Phase> => {
     // window.albear is absent outside Electron (e.g. jest/jsdom without a mock).
     if (!window.albear) {
       setPhase('unavailable');
-      return;
+      return 'unavailable';
     }
     try {
       const st = unwrap(await window.albear.status());
       setRecordCount(st.recordCount);
+      let next: Phase;
       if (st.available) {
-        if (!st.initialized) setPhase('uninitialized');
-        else if (!st.unlocked) setPhase('locked');
-        else setPhase('unlocked');
-        return;
+        if (!st.initialized) next = 'uninitialized';
+        else if (!st.unlocked) next = 'locked';
+        else next = 'unlocked';
+      } else {
+        const service = unwrap(await window.albear.daemonServiceStatus());
+        switch (service.state) {
+          case 'stopped':
+            next = 'service-setup';
+            break;
+          case 'failed':
+            next = 'service-failed';
+            break;
+          case 'missing':
+            next = 'service-missing';
+            break;
+          case 'unsupported':
+            next = 'service-unsupported';
+            break;
+          default:
+            // systemd sees a running service but its socket is not reachable
+            // yet.
+            next = 'unavailable';
+        }
       }
-
-      const service = unwrap(await window.albear.daemonServiceStatus());
-      switch (service.state) {
-        case 'stopped':
-          setPhase('service-setup');
-          break;
-        case 'failed':
-          setPhase('service-failed');
-          break;
-        case 'missing':
-          setPhase('service-missing');
-          break;
-        case 'unsupported':
-          setPhase('service-unsupported');
-          break;
-        default:
-          // systemd sees a running service but its socket is not reachable yet.
-          setPhase('unavailable');
-      }
+      setPhase(next);
+      return next;
     } catch {
       setPhase('unavailable');
+      return 'unavailable';
     }
   }, []);
 
@@ -89,6 +108,12 @@ export function VaultProvider({
     unwrap(await window.albear.daemonServiceSetup());
     await refresh();
   }, [refresh]);
+
+  // A notice belongs to the locked screen it was handed to; once the vault
+  // is open again it has been read and is dropped.
+  React.useEffect(() => {
+    if (phase === 'unlocked') setNotice(undefined);
+  }, [phase]);
 
   const refreshIfLocked = React.useCallback(
     (err: unknown): boolean => {
@@ -124,10 +149,12 @@ export function VaultProvider({
       phase,
       recordCount,
       refresh,
+      notice,
+      setNotice,
       setupDaemonService,
       refreshIfLocked,
     }),
-    [phase, recordCount, refresh, setupDaemonService, refreshIfLocked],
+    [phase, recordCount, refresh, notice, setupDaemonService, refreshIfLocked],
   );
 
   return (

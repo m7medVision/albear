@@ -42,6 +42,11 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* The 15px root below shrinks every rem step, which would put text-xs at
+     11.25px — under the 12px floor for UI captions. Pin it to 12px. */
+  --text-xs: 0.8rem;
+  --text-xs--line-height: 1.5;
 }
 
 /* ponytail: OS drives the theme; strict CSP forbids the usual pre-paint

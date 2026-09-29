@@ -159,7 +159,7 @@ describe('creating a record', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /New record/ }));
     await screen.findByText('New record');
-    fireEvent.change(screen.getByPlaceholderText('What is this record for?'), {
+    fireEvent.change(screen.getByLabelText(/^Name/), {
       target: { value: 'Deploy key' },
     });
     fireEvent.change(screen.getByLabelText('Type'), {
@@ -192,12 +192,14 @@ describe('deleting a record', () => {
     const remove = jest.fn().mockResolvedValue(ok({}));
     renderSection({ remove });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete GitHub' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete GitHub' }),
+    );
     // The first click only asks.
     expect(remove).not.toHaveBeenCalled();
     expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete record' }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith('r1'));
   });
 
@@ -205,10 +207,109 @@ describe('deleting a record', () => {
     const remove = jest.fn().mockResolvedValue(ok({}));
     renderSection({ remove });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete GitHub' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete GitHub' }),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(remove).not.toHaveBeenCalled();
     expect(screen.queryByText(/This cannot be undone/)).not.toBeInTheDocument();
+  });
+});
+
+describe('record list states', () => {
+  it('says it is loading rather than claiming the vault is empty', async () => {
+    renderSection({ list: jest.fn(() => new Promise(() => {})) });
+    expect(await screen.findByText('Loading records…')).toBeInTheDocument();
+    expect(screen.queryByText('No records yet')).not.toBeInTheDocument();
+  });
+
+  it('points an empty vault at creating the first record', async () => {
+    renderSection({ list: jest.fn().mockResolvedValue(ok({ records: [] })) });
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Create your first record/ }),
+    );
+    expect(await screen.findByText('New record')).toBeInTheDocument();
+  });
+
+  it('offers a retry when the list fails to load', async () => {
+    const list = jest
+      .fn()
+      .mockResolvedValueOnce(fail('TRANSPORT', 'socket closed'))
+      .mockResolvedValue(ok({ records: [LOGIN] }));
+    renderSection({ list });
+    expect(
+      await screen.findByText('Unable to load records'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('GitHub')).toBeInTheDocument();
+  });
+});
+
+describe('revealed secrets', () => {
+  it('gives every copy button a name that says what it copies', async () => {
+    renderSection();
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Reveal GitHub' }),
+    );
+    expect(
+      await screen.findByRole('button', { name: 'Copy Password' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Copy Notes' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Copy pin' }),
+    ).toBeInTheDocument();
+  });
+
+  it('copies only the password from a login row, and announces it', async () => {
+    const copyText = jest.fn().mockResolvedValue(ok({}));
+    renderSection({ copyText });
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Copy password for GitHub' }),
+    );
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(SECRET.password));
+    expect(
+      await screen.findByText('Password copied to the clipboard.'),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('record editor validation', () => {
+  it('keeps Create enabled and focuses the missing name on submit', async () => {
+    const create = jest.fn();
+    renderSection({ create });
+    fireEvent.click(await screen.findByRole('button', { name: /New record/ }));
+    const submit = await screen.findByRole('button', { name: /Create record/ });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    expect(screen.getByLabelText(/^Name/)).toHaveFocus();
+    expect(
+      screen.getByText('Enter a name for this record.'),
+    ).toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('explains what the Project ID matches', async () => {
+    renderSection();
+    fireEvent.click(await screen.findByRole('button', { name: /New record/ }));
+    expect(
+      await screen.findByLabelText(/Project ID/),
+    ).toHaveAccessibleDescription(/localhost.*albear-id/);
+  });
+
+  it('asks before discarding unsaved changes on Cancel', async () => {
+    renderSection();
+    await openEditor();
+    fireEvent.change(screen.getByDisplayValue('GitHub'), {
+      target: { value: 'GitHub (work)' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(
+      screen.getByText('Discard your unsaved changes?'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByDisplayValue('GitHub (work)')).toBeInTheDocument();
   });
 });

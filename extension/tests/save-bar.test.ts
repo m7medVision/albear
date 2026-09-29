@@ -152,8 +152,34 @@ describe('renderSaveBar (save mode)', () => {
     const [save] = bar.el.querySelectorAll<HTMLButtonElement>('button')
     userClick(save!)
     await vi.waitFor(() => expect(bar.el.isConnected).toBe(true))
-    expect(bar.el.textContent).toContain('VAULT_LOCKED')
+    expect(bar.el.textContent).toContain('albear is locked')
+    expect(bar.el.textContent).not.toContain('VAULT_LOCKED')
+    expect(bar.el.querySelector('[role="alert"]')!.textContent).toContain('Unlock it')
     bar.remove()
+  })
+
+  it('an unknown failure still names a way to recover', async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error('INTERNAL'))
+    const bar = renderSaveBar(optsFor('save', null, { onSave, onUpdate: vi.fn(), onSaveNew: vi.fn() }))
+    const [save] = bar.el.querySelectorAll<HTMLButtonElement>('button')
+    userClick(save!)
+    await vi.waitFor(() => expect(bar.el.textContent).toContain('add the login from the albear popup'))
+    expect(bar.el.textContent).not.toContain('INTERNAL')
+    bar.remove()
+  })
+
+  it('Escape from the user dismisses the bar; a synthetic one does not', () => {
+    const bar = renderSaveBar(optsFor('save', null, { onSave: vi.fn(), onUpdate: vi.fn(), onSaveNew: vi.fn() }))
+    const [save] = bar.el.querySelectorAll<HTMLButtonElement>('button')
+    save!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(bar.el.isConnected).toBe(true)
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+    const impl = Object.getOwnPropertySymbols(ev)
+      .map((sym) => (ev as unknown as Record<symbol, unknown>)[sym])
+      .find((v): v is object => !!v && typeof v === 'object' && 'isTrusted' in v)
+    Object.defineProperty(impl!, 'isTrusted', { get: () => true, set: () => {}, configurable: true })
+    save!.dispatchEvent(ev)
+    expect(bar.el.isConnected).toBe(false)
   })
 
   it('Dismiss removes the bar without calling any save callback', () => {
@@ -553,7 +579,7 @@ describe('content script: save flow on submit', () => {
     const [save] = Array.from(barRoot!.querySelectorAll('button')) as HTMLButtonElement[]
     userClick(save!)
     await vi.waitFor(() =>
-      expect(barRoot!.textContent).toContain('VAULT_LOCKED'),
+      expect(barRoot!.textContent).toContain('albear is locked'),
     )
   })
 

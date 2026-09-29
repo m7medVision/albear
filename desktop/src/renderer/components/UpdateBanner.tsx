@@ -45,7 +45,7 @@ export function UpdateBanner(): React.ReactElement | null {
       <Alert>
         <Download />
         <AlertTitle>Update ready</AlertTitle>
-        <AlertDescription className="flex items-center justify-between gap-2">
+        <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
           <span>{label} has been downloaded.</span>
           <Button
             size="sm"
@@ -67,7 +67,7 @@ export function UpdateBanner(): React.ReactElement | null {
     <Alert>
       <Download />
       <AlertTitle>Update available</AlertTitle>
-      <AlertDescription>
+      <AlertDescription className="tabular-nums">
         {phase === 'downloading'
           ? `${label} is downloading… ${Math.round(percent)}%`
           : `${label} is available and will download in the background.`}
