@@ -22,16 +22,18 @@ export const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<
 )
 CardHeader.displayName = 'CardHeader'
 
-export const CardTitle = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+// A real heading, so each card's title shows up in the document outline under
+// the popup's <h1>.
+export const CardTitle = React.forwardRef<HTMLHeadingElement, React.HTMLAttributes<HTMLHeadingElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} className={cn('text-sm font-semibold leading-none', className)} {...props} />
+    <h2 ref={ref} className={cn('text-sm font-semibold leading-tight text-balance', className)} {...props} />
   ),
 )
 CardTitle.displayName = 'CardTitle'
 
 export const CardDescription = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} className={cn('text-xs text-muted-foreground', className)} {...props} />
+    <div ref={ref} className={cn('text-xs text-muted-foreground text-pretty', className)} {...props} />
   ),
 )
 CardDescription.displayName = 'CardDescription'

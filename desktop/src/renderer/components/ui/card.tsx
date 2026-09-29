@@ -28,13 +28,20 @@ export const CardHeader = React.forwardRef<
 ));
 CardHeader.displayName = 'CardHeader';
 
+/**
+ * A card's title is a real heading, so screen-reader users can jump between
+ * cards by heading. `h2` sits under the app's one `h1`; pass `as` for a
+ * nested card, or `as="div"` where a heading would be wrong.
+ */
 export const CardTitle = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => (
-  <div
+  HTMLHeadingElement,
+  React.HTMLAttributes<HTMLHeadingElement> & {
+    as?: 'h2' | 'h3' | 'h4' | 'div';
+  }
+>(({ className, as: Comp = 'h2', ...props }, ref) => (
+  <Comp
     ref={ref}
-    className={cn('text-sm font-semibold leading-none', className)}
+    className={cn('text-sm font-semibold leading-snug text-balance', className)}
     {...props}
   />
 ));
@@ -46,7 +53,7 @@ export const CardDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn('text-xs text-muted-foreground', className)}
+    className={cn('text-xs text-muted-foreground text-pretty', className)}
     {...props}
   />
 ));

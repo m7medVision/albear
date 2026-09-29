@@ -32,6 +32,8 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -82,6 +84,10 @@
   --destructive-foreground: oklch(0.99 0.005 250);
   --success: oklch(0.52 0.13 155);
   --success-foreground: oklch(0.99 0.005 250);
+  /* Amber, ~50deg from destructive so the two read apart side by side.
+     Dark text on the fill: 8.5:1 light, 9.9:1 dark. */
+  --warning: oklch(0.8 0.15 75);
+  --warning-foreground: oklch(0.25 0.05 60);
   --border: oklch(0.9 0.012 250);
   --input: oklch(0.9 0.012 250);
   --ring: oklch(0.5 0.13 233);
@@ -107,6 +113,8 @@
     --destructive-foreground: oklch(0.18 0.03 250);
     --success: oklch(0.72 0.14 158);
     --success-foreground: oklch(0.18 0.03 250);
+    --warning: oklch(0.8 0.14 75);
+    --warning-foreground: oklch(0.18 0.03 250);
     --border: oklch(1 0 0 / 11%);
     --input: oklch(1 0 0 / 14%);
     --ring: oklch(0.72 0.13 224);
@@ -133,7 +141,7 @@ body {
    distinguishable, and ligatures never fuse a password's glyphs. */
 .secret {
   font-family: var(--font-mono);
-  font-feature-settings: "zero" 1, "tnum" 1;
+  font-variant-numeric: slashed-zero tabular-nums;
   font-variant-ligatures: none;
   letter-spacing: 0.01em;
 }
@@ -142,6 +150,9 @@ body {
   background: color-mix(in oklab, var(--primary) 28%, transparent);
 }
 
+/* The one focus indicator for every control. Primitives deliberately do not
+   swap it for a box-shadow ring: forced-colors mode strips box-shadows, while
+   an outline is repainted in the system highlight colour. */
 :focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;

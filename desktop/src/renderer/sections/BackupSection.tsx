@@ -14,23 +14,28 @@ import {
   CardContent,
 } from '@/components/ui/card';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
-import { useVault } from '@/VaultContext';
+import { useVault, type Notice } from '@/VaultContext';
 import { unwrap, messageOf } from '@/lib/api';
 import { isCanceled, type BackupInfo } from '../../shared/vaultTypes';
 
 type Busy = 'create' | 'verify' | 'restore' | null;
+type Problem = { title: string; detail: string };
+
+const NO_ANSWER = 'The Albear service did not answer.';
 
 export function BackupSection(): React.ReactElement {
-  const { refresh, refreshIfLocked } = useVault();
+  const { refresh, refreshIfLocked, setNotice } = useVault();
   const [busy, setBusy] = React.useState<Busy>(null);
-  const [err, setErr] = React.useState<string | undefined>();
-  const [ok, setOk] = React.useState<string | undefined>();
+  const [err, setErr] = React.useState<Problem | undefined>();
+  const [savedTo, setSavedTo] = React.useState<string | undefined>();
+  const [restored, setRestored] = React.useState(false);
   const [verified, setVerified] = React.useState<BackupInfo | undefined>();
 
   function begin(what: Busy): void {
     setBusy(what);
     setErr(undefined);
-    setOk(undefined);
+    setSavedTo(undefined);
+    setRestored(false);
     setVerified(undefined);
   }
 
@@ -40,9 +45,14 @@ export function BackupSection(): React.ReactElement {
       const res = unwrap(await window.albear.backupCreate());
       // Dismissing the dialog is a success carrying "nothing happened".
       if (isCanceled(res)) return;
-      setOk(`Backup written to ${res.path}`);
+      setSavedTo(res.path);
     } catch (e) {
-      if (!refreshIfLocked(e)) setErr(messageOf(e, 'could not create a backup'));
+      if (!refreshIfLocked(e)) {
+        setErr({
+          title: 'Unable to create the backup',
+          detail: `${messageOf(e, NO_ANSWER)} Choose a folder you can write to, with free space, and try again.`,
+        });
+      }
     } finally {
       setBusy(null);
     }
@@ -58,9 +68,11 @@ export function BackupSection(): React.ReactElement {
       // A failed HMAC is the check working, not the app breaking: say so
       // plainly rather than presenting the container as merely unavailable.
       if (!refreshIfLocked(e)) {
-        setErr(
-          'This file did not authenticate against your vault. It is damaged, tampered with, or belongs to a different vault — do not restore it.',
-        );
+        setErr({
+          title: 'This backup did not verify',
+          detail:
+            'The file is damaged, was changed, or belongs to a different vault, so do not restore it. Choose another backup file, or create a new backup now.',
+        });
       }
     } finally {
       setBusy(null);
@@ -69,30 +81,56 @@ export function BackupSection(): React.ReactElement {
 
   async function restore(): Promise<void> {
     begin('restore');
+    let outcome: Notice | undefined;
     try {
       const res = unwrap(await window.albear.backupRestore());
       if (isCanceled(res)) return;
-      setOk('Vault restored. It has been locked — unlock it to continue.');
+      setRestored(true);
+      outcome = {
+        title: 'Vault restored',
+        detail:
+          'The vault was replaced from the backup and locked. Unlock it to continue.',
+      };
     } catch (e) {
-      if (!refreshIfLocked(e)) setErr(messageOf(e, 'could not restore'));
+      outcome = {
+        title: 'Unable to restore the backup',
+        detail: `${messageOf(e, NO_ANSWER)} The restore did not finish, so your current records should be unchanged. Check the file with Verify backup, then try again.`,
+        tone: 'destructive',
+      };
+      if (!refreshIfLocked(e)) setErr(outcome);
     } finally {
       setBusy(null);
-      // Restore locks the vault, so the phase moved regardless of the outcome.
-      void refresh();
     }
+    // Restore locks the vault, which unmounts this section before its result
+    // can be read. When that happens, hand the outcome to the unlock screen.
+    const next = await refresh();
+    if (next !== 'unlocked' && outcome) setNotice(outcome);
   }
 
   return (
     <div className="flex flex-col gap-4">
       {err && (
         <Alert variant="destructive">
-          <AlertTitle>Backup failed</AlertTitle>
-          <AlertDescription>{err}</AlertDescription>
+          <AlertTitle>{err.title}</AlertTitle>
+          <AlertDescription>{err.detail}</AlertDescription>
         </Alert>
       )}
-      {ok && (
+      {/* Outcomes the user is waiting for, not interruptions: announce them
+          politely rather than as alerts. */}
+      {savedTo && (
         <Alert>
-          <AlertDescription>{ok}</AlertDescription>
+          <AlertTitle>Backup saved</AlertTitle>
+          <AlertDescription>
+            <code className="break-all">{savedTo}</code>
+          </AlertDescription>
+        </Alert>
+      )}
+      {restored && (
+        <Alert>
+          <AlertTitle>Vault restored</AlertTitle>
+          <AlertDescription>
+            The vault is now locked. Unlock it to continue.
+          </AlertDescription>
         </Alert>
       )}
       {verified && (
@@ -115,7 +153,11 @@ export function BackupSection(): React.ReactElement {
         </CardHeader>
         <CardContent>
           <Button disabled={busy !== null} onClick={() => void create()}>
-            {busy === 'create' ? <Loader2 className="animate-spin" /> : <Archive />}
+            {busy === 'create' ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <Archive />
+            )}
             Create backup…
           </Button>
         </CardContent>

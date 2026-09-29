@@ -5,8 +5,9 @@
 //
 // The bar is sticky (no auto-dismiss) so the user can act at their pace.
 // Errors from the save RPC are surfaced in the bar's status line, never
-// swallowed. Shadcn-style tokens (dark) are inlined as literal values so the
-// bar renders the same on any host page regardless of the host's CSS.
+// swallowed, as a sentence that says how to recover — never a raw code. The
+// product's dark-theme tokens are inlined as literal values so the bar renders
+// the same on any host page regardless of the host's CSS.
 export interface ExistingRecord {
   id: string
   revision: number
@@ -41,22 +42,41 @@ export interface SaveBar {
 
 const BAR_ID = 'albear-save-bar'
 
-// ponytail: hardcoded shadcn dark tokens. The bar lives on third-party
-// pages where we cannot rely on the host defining our --background etc.
+// The bar lives on third-party pages where we cannot rely on the host defining
+// our --background etc., so these are literal copies of the popup's dark-theme
+// tokens (src/styles/popup.css) — keep them in step. Inline styles only: the
+// host page's CSP may block a <style> element but never CSSOM writes.
 const T = {
-  bg: '#1f1f1f',
-  fg: '#fafafa',
-  border: 'rgba(255, 255, 255, 0.12)',
-  primaryBg: '#e5e5e5',
-  primaryFg: '#1f1f1f',
-  secondaryBg: '#3a3a3a',
-  secondaryFg: '#fafafa',
-  destructive: '#ff6b6b',
+  bg: 'oklch(0.225 0.03 251)', // --card
+  fg: 'oklch(0.96 0.008 250)', // --card-foreground
+  mutedFg: 'oklch(0.73 0.02 250)', // --muted-foreground
+  border: 'oklch(1 0 0 / 11%)', // --border
+  primaryBg: 'oklch(0.72 0.13 224)', // --primary
+  primaryFg: 'oklch(0.2 0.04 245)', // --primary-foreground
+  secondaryBg: 'oklch(0.28 0.03 252)', // --secondary
+  secondaryFg: 'oklch(0.95 0.008 250)', // --secondary-foreground
+  destructive: 'oklch(0.68 0.18 25)', // --destructive
 } as const
 
 const BUTTON_BASE =
-  'border:0;border-radius:6px;padding:5px 12px;cursor:pointer;' +
-  'font:500 13px ui-sans-serif,system-ui,sans-serif;transition:background 120ms ease;'
+  'border:0;border-radius:6px;padding:5px 12px;cursor:pointer;white-space:nowrap;' +
+  'font:500 13px ui-sans-serif,system-ui,sans-serif;'
+
+// Error codes arrive as Error(code) from the background. Each message names
+// what failed and what to do next.
+const SAVE_ERRORS: Record<string, string> = {
+  VAULT_LOCKED: 'Unable to save: albear is locked. Unlock it from the toolbar, then try again.',
+  DISCONNECTED: 'Unable to save: vaultd isn’t reachable. Start it, then try again.',
+  RELAY: 'Unable to save: vaultd isn’t reachable. Start it, then try again.',
+  CONFLICT: 'Unable to update: this login changed somewhere else. Select Save as new instead.',
+  ALREADY_EXISTS: 'Unable to save: this login already exists. Add it from the albear popup with another name.',
+  DENIED: 'Unable to save from this page. Add the login from the albear popup instead.',
+}
+
+export function saveErrorText(e: unknown): string {
+  const code = (e instanceof Error ? e.message : String(e)).replace(/^Error:\s*/, '')
+  return SAVE_ERRORS[code] ?? 'Unable to save. Try again, or add the login from the albear popup.'
+}
 
 function makeButton(text: string, variant: 'primary' | 'secondary'): HTMLButtonElement {
   const b = document.createElement('button')
@@ -80,22 +100,39 @@ function onUserClick(el: HTMLElement, fn: () => void): void {
   })
 }
 
-function makeStatus(): HTMLSpanElement {
-  const s = document.createElement('span')
-  s.style.cssText = `font-size:11px;color:${T.destructive};margin-left:auto;min-height:14px`
+// A live region that exists (empty) before any error lands in it, so the
+// error is announced reliably. It takes no space until it has text.
+function makeStatus(): HTMLDivElement {
+  const s = document.createElement('div')
+  s.setAttribute('role', 'alert')
+  s.style.cssText = `font-size:12px;line-height:1.4;color:${T.destructive};overflow-wrap:anywhere`
   return s
 }
 
-function makeLabel(): HTMLSpanElement {
-  const s = document.createElement('span')
-  s.style.cssText = 'display:flex;flex-direction:column;line-height:1.3;flex:1;min-width:0'
+function setStatusText(status: HTMLElement, text: string): void {
+  status.textContent = text
+  status.style.marginTop = text ? '8px' : '0'
+}
+
+function makeLabel(): HTMLDivElement {
+  const s = document.createElement('div')
+  s.style.cssText = 'display:flex;flex-direction:column;gap:2px;line-height:1.4;min-width:0;overflow-wrap:anywhere'
   return s
+}
+
+// Buttons sit on their own wrapping row under the label, so neither the label
+// nor a long username gets crushed by three buttons on a narrow viewport.
+function makeActions(...buttons: HTMLButtonElement[]): HTMLDivElement {
+  const row = document.createElement('div')
+  row.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'
+  row.append(...buttons)
+  return row
 }
 
 function renderUpdate(
   opts: RenderOpts,
   bar: HTMLDivElement,
-  status: HTMLSpanElement,
+  status: HTMLDivElement,
   destroy: () => void,
 ): void {
   const ex = opts.existing!
@@ -104,25 +141,25 @@ function renderUpdate(
   name.textContent = ex.name
   name.style.cssText = 'font-size:13px;font-weight:600'
   const sub = document.createElement('span')
-  sub.textContent = `Saved as ${ex.username || '(no username)'}`
-  sub.style.cssText = 'font-size:11px;opacity:.75'
+  sub.textContent = ex.username ? `Saved as ${ex.username}` : 'Saved without a username'
+  sub.style.cssText = `font-size:12px;color:${T.mutedFg}`
   label.append(name, sub)
 
   const update = makeButton('Update', 'primary')
   const saveNew = makeButton('Save as new', 'secondary')
   const dismiss = makeButton('Dismiss', 'secondary')
-  bar.append(label, update, saveNew, dismiss)
+  bar.append(label, makeActions(update, saveNew, dismiss))
 
   const run = async (cb: () => Promise<void> | void): Promise<void> => {
     update.disabled = true
     saveNew.disabled = true
     dismiss.disabled = true
-    status.textContent = ''
+    setStatusText(status, '')
     try {
       await cb()
       destroy()
     } catch (e) {
-      status.textContent = e instanceof Error ? e.message : String(e)
+      setStatusText(status, saveErrorText(e))
       update.disabled = false
       saveNew.disabled = false
       dismiss.disabled = false
@@ -141,7 +178,7 @@ function renderUpdate(
 function renderSave(
   opts: RenderOpts,
   bar: HTMLDivElement,
-  status: HTMLSpanElement,
+  status: HTMLDivElement,
   destroy: () => void,
 ): void {
   const label = makeLabel()
@@ -154,17 +191,17 @@ function renderSave(
 
   const save = makeButton('Save', 'primary')
   const dismiss = makeButton('Dismiss', 'secondary')
-  bar.append(label, save, dismiss)
+  bar.append(label, makeActions(save, dismiss))
 
   const run = async (cb: () => Promise<void> | void): Promise<void> => {
     save.disabled = true
     dismiss.disabled = true
-    status.textContent = ''
+    setStatusText(status, '')
     try {
       await cb()
       destroy()
     } catch (e) {
-      status.textContent = e instanceof Error ? e.message : String(e)
+      setStatusText(status, saveErrorText(e))
       save.disabled = false
       dismiss.disabled = false
     }
@@ -194,19 +231,25 @@ export function renderSaveBar(opts: RenderOpts): SaveBar {
   const root = host.attachShadow({ mode: 'closed' })
 
   const bar = document.createElement('div')
-  bar.setAttribute('role', 'alertdialog')
+  // A non-modal dialog: it never steals focus from the page's own flow, and
+  // Escape dismisses it once the user has tabbed into it.
+  bar.setAttribute('role', 'dialog')
   bar.setAttribute('aria-label', 'Save login to albear')
   bar.style.cssText =
-    `position:fixed;top:12px;right:12px;z-index:2147483647;` +
+    `position:fixed;top:12px;right:12px;z-index:2147483647;box-sizing:border-box;` +
     `background:${T.bg};color:${T.fg};border:1px solid ${T.border};` +
     `border-radius:8px;font:13px ui-sans-serif,system-ui,sans-serif;` +
     `box-shadow:0 8px 24px rgba(0,0,0,0.4);` +
-    `display:flex;gap:10px;align-items:center;max-width:360px;padding:10px 14px`
+    `display:flex;flex-direction:column;width:max-content;` +
+    `max-width:min(360px, calc(100vw - 24px));padding:10px 14px`
 
   const status = makeStatus()
   // Removing the host takes the shadow root and the bar with it; removing the
   // bar alone would leave an orphaned host in the page.
   const destroy = (): void => host.remove()
+  bar.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.isTrusted && event.key === 'Escape') destroy()
+  })
 
   if (opts.mode === 'update' && opts.existing) {
     renderUpdate(opts, bar, status, destroy)
@@ -221,7 +264,7 @@ export function renderSaveBar(opts: RenderOpts): SaveBar {
   return {
     el: bar,
     setStatus(text) {
-      status.textContent = text
+      setStatusText(status, text)
     },
     remove: destroy,
   }

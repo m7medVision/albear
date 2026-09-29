@@ -37,13 +37,15 @@ export function DaemonSetupCard(): React.ReactElement {
       <CardHeader>
         <CardTitle>Start Albear</CardTitle>
         <CardDescription>
-          Albear needs its local background service before this app, the CLI,
-          or the browser extension can reach your vault.
+          Albear needs its local background service before this app, the CLI, or
+          the browser extension can reach your vault.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="text-sm text-muted-foreground space-y-1">
-          <p>It runs only for your Linux account and never listens on a network.</p>
+          <p>
+            It runs only for your Linux account and never listens on a network.
+          </p>
           <p>
             It will start when you sign in and stays locked until you enter your
             master password.
@@ -56,7 +58,16 @@ export function DaemonSetupCard(): React.ReactElement {
         {error && (
           <Alert variant="destructive">
             <AlertTitle>Could not start Albear</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription className="flex flex-col gap-1">
+              <span>{error}</span>
+              <span>
+                Select Enable and start to try again. If it keeps failing, run{' '}
+                <code translate="no">
+                  systemctl --user status albear-vaultd
+                </code>{' '}
+                in a terminal to see why.
+              </span>
+            </AlertDescription>
           </Alert>
         )}
       </CardContent>

@@ -6,7 +6,13 @@
 // secrets, open editors, unsaved edits — without anything having to remember to
 // clear it.
 import * as React from 'react';
-import { MemoryRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import {
+  MemoryRouter,
+  Routes,
+  Route,
+  NavLink,
+  Navigate,
+} from 'react-router-dom';
 import {
   Activity,
   Archive,
@@ -72,7 +78,12 @@ const SECTIONS = [
 
 function SectionNav(): React.ReactElement {
   return (
-    <nav className="flex items-center gap-1 border-b border-border">
+    // Wraps rather than scrolls: at a narrow window every section stays visible
+    // instead of hiding past an edge with no cue.
+    <nav
+      aria-label="Sections"
+      className="flex flex-wrap items-center gap-1 border-b border-border"
+    >
       {SECTIONS.map(({ to, label, icon: Icon }) => (
         <NavLink
           key={to}
@@ -145,8 +156,11 @@ function PhaseScreen(): React.ReactElement | null {
 
   if (phase === 'connecting') {
     return (
-      <p className="text-sm text-muted-foreground text-center py-10">
-        connecting to vaultd…
+      <p
+        role="status"
+        className="text-sm text-muted-foreground text-center py-10"
+      >
+        Connecting to the Albear service…
       </p>
     );
   }
@@ -214,8 +228,8 @@ function Shell(): React.ReactElement {
     <div className="min-h-screen flex flex-col">
       {/* Full-bleed rule, but the controls line up with the content column
           below rather than drifting out to the window edges. */}
-      <header className="px-6 py-4 border-b border-border">
-        <div className="w-full max-w-3xl mx-auto flex items-center gap-3">
+      <header className="px-4 sm:px-6 py-4 border-b border-border">
+        <div className="w-full max-w-3xl mx-auto flex flex-wrap items-center gap-3">
           {/* The mark is drawn for a light field — its own background is
               transparent, so it muddies against a dark header. The white tile
               is fixed in both themes to keep the shield legible. */}
@@ -237,7 +251,7 @@ function Shell(): React.ReactElement {
         </div>
       </header>
 
-      <main className="flex-1 px-6 py-5 w-full max-w-3xl mx-auto flex flex-col gap-4">
+      <main className="flex-1 px-4 sm:px-6 py-5 w-full max-w-3xl mx-auto flex flex-col gap-4">
         <UpdateBanner />
         {phase === 'unlocked' ? (
           <>

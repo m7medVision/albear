@@ -17,12 +17,12 @@ describe('App', () => {
     window.albear = albearMock({
       status: jest
         .fn()
-        .mockResolvedValue(ok({ available: true, initialized: true, unlocked: false })),
+        .mockResolvedValue(
+          ok({ available: true, initialized: true, unlocked: false }),
+        ),
     });
     render(<App />);
-    expect(
-      await screen.findByPlaceholderText('Master password'),
-    ).toBeInTheDocument();
+    expect(await screen.findByLabelText('Master password')).toBeInTheDocument();
     expect(screen.getByText('locked')).toBeInTheDocument();
   });
 
@@ -48,6 +48,24 @@ describe('App', () => {
     render(<App />);
     expect(await screen.findByText('GitHub')).toBeInTheDocument();
     expect(screen.getByText('Reveal')).toBeInTheDocument();
+  });
+
+  it('labels the unlock field and says how to recover from a wrong password', async () => {
+    window.albear = albearMock({
+      status: jest
+        .fn()
+        .mockResolvedValue(
+          ok({ available: true, initialized: true, unlocked: false }),
+        ),
+      unlock: jest.fn().mockResolvedValue(fail('AUTH_FAILED')),
+    });
+    render(<App />);
+    const field = await screen.findByLabelText('Master password');
+    expect(field).toHaveAttribute('autocomplete', 'current-password');
+    fireEvent.change(field, { target: { value: 'nope' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+    expect(await screen.findByText(/Check Caps Lock/)).toBeInTheDocument();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
   });
 });
 
@@ -115,9 +133,7 @@ describe('daemon service onboarding', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'Enable and start' }),
     );
-    expect(
-      await screen.findByPlaceholderText('Master password'),
-    ).toBeInTheDocument();
+    expect(await screen.findByLabelText('Master password')).toBeInTheDocument();
     expect(unlock).not.toHaveBeenCalled();
   });
 
@@ -140,7 +156,9 @@ describe('daemon service onboarding', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'Enable and start' }),
     );
-    expect(await screen.findByText('Could not start Albear')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Could not start Albear'),
+    ).toBeInTheDocument();
     expect(
       screen.getByText('could not start the Albear background service'),
     ).toBeInTheDocument();
@@ -177,7 +195,9 @@ describe('daemon service onboarding', () => {
 describe('vault creation', () => {
   it('offers to create the vault in-app rather than sending the user to a terminal', async () => {
     window.albear = albearMock({
-      status: jest.fn().mockResolvedValue(ok({ available: true, initialized: false })),
+      status: jest
+        .fn()
+        .mockResolvedValue(ok({ available: true, initialized: false })),
     });
     render(<App />);
 
@@ -189,26 +209,66 @@ describe('vault creation', () => {
 
   it('states the password policy up front, since the daemon will not say which rule failed', async () => {
     window.albear = albearMock({
-      status: jest.fn().mockResolvedValue(ok({ available: true, initialized: false })),
+      status: jest
+        .fn()
+        .mockResolvedValue(ok({ available: true, initialized: false })),
     });
     render(<App />);
-    expect(await screen.findByText(/At least 12 characters/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/At least 12 characters/),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps Create enabled and explains a mismatch on the field itself', async () => {
+    const init = jest.fn();
+    window.albear = albearMock({
+      status: jest
+        .fn()
+        .mockResolvedValue(ok({ available: true, initialized: false })),
+      init,
+    });
+    render(<App />);
+    fireEvent.change(await screen.findByLabelText('Master password'), {
+      target: { value: 'a-long-enough-password' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm master password'), {
+      target: { value: 'something-else' },
+    });
+    const submit = screen.getByRole('button', { name: 'Create vault' });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    expect(
+      screen.getByLabelText('Confirm master password'),
+    ).toHaveAccessibleDescription(/do not match/);
+    expect(init).not.toHaveBeenCalled();
   });
 });
 
 describe('navigation', () => {
   it('moves between sections without touching the document URL', async () => {
     const before = window.location.href;
-    window.albear = albearMock({ status: jest.fn().mockResolvedValue(UNLOCKED) });
+    window.albear = albearMock({
+      status: jest.fn().mockResolvedValue(UNLOCKED),
+    });
     render(<App />);
 
+    // Asserted on the active link, not on section copy, which those sections
+    // own and may reword.
     fireEvent.click(await screen.findByRole('link', { name: 'Activity' }));
-    expect(await screen.findByText('no recent activity')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: 'Activity' })).toHaveAttribute(
+        'aria-current',
+        'page',
+      ),
+    );
 
     fireEvent.click(screen.getByRole('link', { name: 'Clients' }));
-    expect(
-      await screen.findByText('nothing is waiting for approval'),
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: 'Clients' })).toHaveAttribute(
+        'aria-current',
+        'page',
+      ),
+    );
 
     // MemoryRouter keeps navigation off the URL, so it cannot collide with the
     // renderer's top-level navigation blocking.
@@ -219,13 +279,19 @@ describe('navigation', () => {
     window.albear = albearMock({
       status: jest
         .fn()
-        .mockResolvedValue(ok({ available: true, initialized: true, unlocked: false })),
+        .mockResolvedValue(
+          ok({ available: true, initialized: true, unlocked: false }),
+        ),
     });
     render(<App />);
 
-    await screen.findByPlaceholderText('Master password');
-    expect(screen.queryByRole('link', { name: 'Records' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Backup' })).not.toBeInTheDocument();
+    await screen.findByLabelText('Master password');
+    expect(
+      screen.queryByRole('link', { name: 'Records' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: 'Backup' }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -241,5 +307,30 @@ describe('panic lock', () => {
     // No confirmation step: a prompt would defeat the point of a panic control.
     fireEvent.click(await screen.findByRole('button', { name: /Panic/ }));
     await waitFor(() => expect(panic).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('restoring a backup', () => {
+  it('shows the outcome on the unlock screen, since restore locks the vault', async () => {
+    const status = jest.fn().mockResolvedValue(UNLOCKED);
+    window.albear = albearMock({
+      status,
+      backupRestore: jest.fn().mockImplementation(async () => {
+        // The daemon locks as part of the restore.
+        status.mockResolvedValue(
+          ok({ available: true, initialized: true, unlocked: false }),
+        );
+        return ok({ restored: true });
+      }),
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('link', { name: 'Backup' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Restore backup/ }),
+    );
+
+    expect(await screen.findByLabelText('Master password')).toBeInTheDocument();
+    expect(await screen.findByText('Vault restored')).toBeInTheDocument();
   });
 });

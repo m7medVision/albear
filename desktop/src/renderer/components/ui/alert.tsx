@@ -22,9 +22,12 @@ export const Alert = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement> & VariantProps<typeof alertVariants>
 >(({ className, variant, ...props }, ref) => (
+  // Only a failure interrupts: role="alert" is assertive. Everything else
+  // (update notices, "your edit was not saved" notes) waits politely. A caller
+  // can still pass its own role.
   <div
     ref={ref}
-    role="alert"
+    role={variant === 'destructive' ? 'alert' : 'status'}
     className={cn(alertVariants({ variant }), className)}
     {...props}
   />
@@ -37,7 +40,10 @@ export const AlertTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn('mb-1 font-medium leading-none tracking-tight', className)}
+    className={cn(
+      'mb-1 font-medium leading-snug tracking-tight text-balance',
+      className,
+    )}
     {...props}
   />
 ));
